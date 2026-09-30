@@ -203,6 +203,15 @@ cython_debug/
 # Temporary file for partial code execution
 tempCodeRunnerFile.py
 
+# PassIt development artifacts
+node_modules/
+frontend/dist/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+.playwright/
+
 # Ruff stuff:
 .ruff_cache/
 

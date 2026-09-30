@@ -1,0 +1,141 @@
+import argparse
+import logging
+import time
+from datetime import timedelta
+
+from sqlalchemy import and_, or_, select
+
+from .ai import CreativeAI
+from .config import Settings
+from .db import Database
+from .domain import assign, lock_chain, queue, story_context, timeout
+from .models import AIProfile, Chain, Turn, WorkItem, now, uid
+
+log = logging.getLogger("passit.worker")
+
+
+class Worker:
+    def __init__(self, db, settings, ai=None):
+        self.db = db
+        self.ai = ai or CreativeAI(settings)
+
+    def reconcile(self):
+        with self.db.transaction() as s:
+            for turn in s.scalars(select(Turn).where(Turn.status != "submitted", Turn.deadline_at <= now()).limit(100)):
+                # Same lock order as human submission to prevent PostgreSQL deadlocks.
+                lock_chain(s, turn.chain_id)
+                timeout(s, turn.id)
+            for item in s.scalars(select(WorkItem).where(WorkItem.status == "processing", WorkItem.lease_until < now()).limit(100)):
+                item.status = "pending"
+                item.lease_token = None
+            for chain in s.scalars(select(Chain).where(Chain.status == "active").limit(100)):
+                lock_chain(s, chain.id)
+                active = s.scalar(select(Turn).where(Turn.chain_id == chain.id, Turn.status != "submitted"))
+                if not active:
+                    previous = list(s.scalars(select(Turn).where(Turn.chain_id == chain.id).order_by(Turn.position)))
+                    queue(s, "handoff", chain.id, f"handoff:{chain.id}:{len(previous)}")
+
+    def claim(self):
+        with self.db.transaction() as s:
+            item = s.scalar(select(WorkItem).where(
+                or_(and_(WorkItem.status == "pending", WorkItem.available_at <= now()),
+                    and_(WorkItem.status == "processing", WorkItem.lease_until < now()))
+            ).order_by(WorkItem.available_at).with_for_update(skip_locked=True).limit(1))
+            if not item:
+                return None
+            item.status = "processing"
+            item.lease_token = uid()
+            item.lease_until = now() + timedelta(seconds=120)
+            item.attempts += 1
+            return item.id, item.lease_token
+
+    def process(self, item_id, token):
+        # Read immutable task/profile snapshot, then run inference outside the transaction.
+        with self.db.sessions() as s:
+            item = s.get(WorkItem, item_id)
+            task, aggregate = item.task, item.aggregate_id
+            profile = s.get(AIProfile, item.profile_id) if item.profile_id else None
+            if task in {"handoff", "title"}:
+                chain = s.get(Chain, aggregate)
+                context = item.payload if task == "title" else story_context(s, chain)
+                active = s.scalar(select(Turn).where(Turn.chain_id == aggregate, Turn.status != "submitted"))
+                skip = chain.status != "active" or bool(active) if task == "handoff" else bool(chain.title)
+            elif task == "suggestions":
+                turn = s.get(Turn, aggregate)
+                context = {**story_context(s, s.get(Chain, turn.chain_id)), "motive_id": turn.motive_id}
+                skip = turn.status == "submitted" or turn.suggestions is not None
+            else:
+                context, skip = {}, True
+            output = self.ai.generate(profile, task, context) if not skip else None
+        with self.db.transaction() as s:
+            item = s.scalar(select(WorkItem).where(WorkItem.id == item_id).with_for_update())
+            if item.status != "processing" or item.lease_token != token:
+                return
+            if task == "handoff" and output:
+                chain = lock_chain(s, aggregate)
+                # Assignment and recipient are persisted atomically; duplicate deliveries are harmless.
+                assign(s, chain, output["motive_id"])
+            elif task == "suggestions" and output:
+                turn = s.get(Turn, aggregate)
+                lock_chain(s, turn.chain_id)
+                s.refresh(turn, with_for_update=True)
+                if turn.status != "submitted" and turn.suggestions is None:
+                    turn.suggestions = output["suggestions"]
+                    turn.fallback_index = output["fallback_index"]
+                    s.flush()
+                    timeout(s, turn.id)
+            elif task == "title" and output:
+                chain = lock_chain(s, aggregate)
+                if not chain.title:
+                    chain.title = output["title"]
+            elif task == "timeout":
+                timeout(s, aggregate)
+            item.status = "done"
+            item.lease_token = None
+            item.error_code = None
+
+    def run_once(self):
+        claim = self.claim()
+        if not claim:
+            return False
+        item_id, token = claim
+        try:
+            self.process(item_id, token)
+        except Exception as exc:
+            # No private stories, model output, response body or credentials in logs.
+            code = type(exc).__name__
+            log.warning("Work item %s failed (%s)", item_id, code)
+            with self.db.transaction() as s:
+                item = s.scalar(select(WorkItem).where(WorkItem.id == item_id).with_for_update())
+                if item.status == "processing" and item.lease_token == token:
+                    profile = s.get(AIProfile, item.profile_id) if item.profile_id else None
+                    limit = profile.max_retries + 1 if profile else 4
+                    item.status = "failed" if item.attempts >= limit else "pending"
+                    item.available_at = now() + timedelta(seconds=min(60, 2 ** item.attempts))
+                    item.error_code = code
+                    item.lease_token = None
+        return True
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--once", action="store_true", help="Reconcile and drain currently available work")
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO)
+    settings = Settings()
+    settings.validate()
+    worker = Worker(Database(settings.database_url), settings)
+    last_scan = 0
+    while True:
+        if time.monotonic() - last_scan >= 10:
+            worker.reconcile()
+            last_scan = time.monotonic()
+        worked = worker.run_once()
+        if args.once and not worked:
+            break
+        if not worked:
+            time.sleep(1)
+
+
+if __name__ == "__main__":
+    main()
