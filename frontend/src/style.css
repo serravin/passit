@@ -1737,7 +1737,7 @@ footer > span:last-child {
     margin-top: 20px;
   }
   .hero-art {
-    height: 380px;
+    height: 430px;
     max-width: 410px;
     width: 100%;
     margin: 0 auto;
@@ -1751,7 +1751,7 @@ footer > span:last-child {
   }
   .continuation {
     left: 60px;
-    top: 178px;
+    top: 218px;
     width: 80%;
   }
   .floating-card p {

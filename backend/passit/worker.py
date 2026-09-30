@@ -20,22 +20,32 @@ class Worker:
         self.ai = ai or CreativeAI(settings)
 
     def reconcile(self):
+        # Hold at most one aggregate lock per transaction. Multiple reconcilers and
+        # submission workers can then operate without reversing chain lock order.
+        with self.db.sessions() as s:
+            overdue = list(
+                s.scalars(
+                    select(Turn.id).where(Turn.status != "submitted", Turn.deadline_at <= now()).limit(100)
+                )
+            )
+            chains = list(s.scalars(select(Chain.id).where(Chain.status == "active").limit(100)))
+        for turn_id in overdue:
+            with self.db.transaction() as s:
+                timeout(s, turn_id)
         with self.db.transaction() as s:
-            for turn in s.scalars(
-                select(Turn).where(Turn.status != "submitted", Turn.deadline_at <= now()).limit(100)
-            ):
-                # Same lock order as human submission to prevent PostgreSQL deadlocks.
-                lock_chain(s, turn.chain_id)
-                timeout(s, turn.id)
             for item in s.scalars(
                 select(WorkItem)
                 .where(WorkItem.status == "processing", WorkItem.lease_until < now())
+                .with_for_update(skip_locked=True)
                 .limit(100)
             ):
                 item.status = "pending"
                 item.lease_token = None
-            for chain in s.scalars(select(Chain).where(Chain.status == "active").limit(100)):
-                lock_chain(s, chain.id)
+        for chain_id in chains:
+            with self.db.transaction() as s:
+                chain = lock_chain(s, chain_id)
+                if chain.status != "active":
+                    continue
                 active = s.scalar(select(Turn).where(Turn.chain_id == chain.id, Turn.status != "submitted"))
                 if not active:
                     previous = list(
@@ -73,7 +83,13 @@ class Worker:
             profile = s.get(AIProfile, item.profile_id) if item.profile_id else None
             if task in {"handoff", "title"}:
                 chain = s.get(Chain, aggregate)
-                context = item.payload if task == "title" else story_context(s, chain)
+                # The first handoff contains only the creator's setup. Later turns
+                # must not change a delayed title's context or enter queue payloads.
+                context = (
+                    {"setup": chain.setup, "story": [chain.setup], "rules": chain.rules}
+                    if task == "title"
+                    else story_context(s, chain)
+                )
                 active = s.scalar(select(Turn).where(Turn.chain_id == aggregate, Turn.status != "submitted"))
                 skip = chain.status != "active" or bool(active) if task == "handoff" else bool(chain.title)
             elif task == "suggestions":
@@ -107,6 +123,7 @@ class Worker:
             elif task == "timeout":
                 timeout(s, aggregate)
             item.status = "done"
+            item.payload = {}
             item.lease_token = None
             item.error_code = None
 

@@ -36,6 +36,7 @@ const categories = [
   { id: "twist", label: "🤯 Plot twists" },
 ];
 const routeNow = () => window.location.hash.slice(1) || "discover";
+let signinCallback: Promise<unknown> | undefined;
 
 export function Avatar({
   person,
@@ -121,7 +122,9 @@ export default function App() {
     async function initialize() {
       try {
         if (window.location.pathname === "/auth/callback" && identity) {
-          await identity.signinRedirectCallback();
+          // React StrictMode can run initialization twice; consume the OIDC state once.
+          signinCallback ??= identity.signinRedirectCallback();
+          await signinCallback;
           window.history.replaceState({}, "", "/#chains");
           setRoute("chains");
         }
@@ -402,7 +405,11 @@ export default function App() {
             </p>
             <div className="account-list">
               {accounts.map((person) => (
-                <button key={person.id} aria-label={`Play as ${person.name}`} onClick={() => void signIn(person)}>
+                <button
+                  key={person.id}
+                  aria-label={`Play as ${person.name}`}
+                  onClick={() => void signIn(person)}
+                >
                   <Avatar person={person} />
                   <span>{person.name}</span>
                   {me?.id === person.id ? (
@@ -893,7 +900,10 @@ function Create({
         <div className="form-main">
           <section className="panel">
             <label htmlFor="setup" className="field-heading">
-              <span className="step-number" aria-hidden="true">1</span>Set the scene
+              <span className="step-number" aria-hidden="true">
+                1
+              </span>
+              Set the scene
             </label>
             <p className="field-description">
               Give everyone a jumping-off point. Keep it short and leave room

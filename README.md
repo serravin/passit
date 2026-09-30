@@ -7,15 +7,11 @@ Stories nobody writes alone. A responsive React client, FastAPI API, SQLAlchemy 
 Requires Python 3.12+, [uv](https://docs.astral.sh/uv/), and Node.js 22+.
 
 ```sh
-uv sync --frozen --extra dev
-cd frontend
-npm ci
-cd ..
-.venv/bin/alembic upgrade head
-.venv/bin/python -m passit.manage seed
+bash scripts/install.sh
+bash scripts/dev.sh
 ```
 
-Run these in separate terminals from the repository root:
+The startup helper runs all three components and shuts them down together. Alternatively, run these in separate terminals from the repository root:
 
 ```sh
 .venv/bin/uvicorn passit.api:app --host 127.0.0.1 --port 8000
@@ -35,11 +31,24 @@ The creator's setup counts as their one contribution. Human submission and passi
 npm --prefix frontend run build
 ```
 
+All 24 backend tests have been run against SQLite and PostgreSQL 17, including concurrent human submissions, timeout races, duplicate jobs, expired leases, concurrent workers/reconcilers, publication decisions, private reads, and production JWT validation. PostgreSQL tests require a **dedicated disposable database**: fixtures recreate its application tables. Set `PASSIT_TEST_DATABASE_URL` to its SQLAlchemy URL, then run the same pytest command.
+
+To exercise the complete UI, leave the development API, worker and web server running, install a Playwright Chromium browser (or set `PLAYWRIGHT_CHROMIUM_PATH` to your existing Chromium), then run:
+
+```sh
+.venv/bin/playwright install chromium
+.venv/bin/python backend/tests/browser_smoke.py
+```
+
+The smoke test creates fictional demo stories and verifies creation, suggestion editing, draft retention, passing, separate publication approvals, discovery, outsider access, and the mobile layout. It saves screenshots under `/tmp`. The CI workflow runs backend tests on both databases, a client build, and this browser workflow; the workflow itself has not run on GitHub yet.
+
 ## Implementation and deployment boundaries
 
 The core includes friend selection, saved group snapshots, opted-in random matching, random recipient assignment, immutable per-turn Motives, private reads, prepared timeout fallback, asynchronous titles, separate Chain/turn likes, in-app notifications, explicit unanimous publication, and versioned admin AI profiles with validation and revision-pinned work.
 
 The local durable job table acts as a transactional outbox and delivery transport. Workers claim leased jobs, retry with backoff, expose failures to admins, recover expired leases, and reconcile overdue turns. This implementation does **not** yet use Azure Service Bus. A broker transport and Azure infrastructure provisioning are separate deployment work. No Azure resources are created by running this application.
+
+The demo uses sample creative text, rather than a live LLM. Real AI is provided through the Azure adapter once configured. Polling and deadline acceptance use server timestamps; the browser timer accounts for client clock differences. Suggestions are visible only to the assigned player and removed when the contribution is committed. Background payloads contain identifiers rather than story or suggestion text.
 
 Production requires PostgreSQL and configured OIDC bearer authentication. See `.env.example`. Run migrations as a controlled step, then `python -m passit.manage seed` to initialize the Motive catalog and platform settings without demo accounts. The React client supports authorization-code login with PKCE using `VITE_OIDC_AUTHORITY`, `VITE_OIDC_CLIENT_ID`, and `VITE_OIDC_SCOPE` (include your API scope); `VITE_API_URL` selects a separate API origin. Configure the API's issuer, audience, JWKS URL, and explicit admin subjects. Serve the client over HTTPS and route `/auth/callback` to `index.html`.
 

@@ -211,6 +211,7 @@ frontend/dist/
 *.db-wal
 .DS_Store
 .playwright/
+*.tsbuildinfo
 
 # Ruff stuff:
 .ruff_cache/

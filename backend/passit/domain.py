@@ -212,7 +212,7 @@ def assign(s, chain, motive_id, timestamp=None):
     queue(s, "suggestions", turn.id, f"suggestions:{turn.id}")
     queue(s, "timeout", turn.id, f"timeout:{turn.id}", available_at=turn.deadline_at)
     if position == 1 and not chain.title:
-        queue(s, "title", chain.id, f"title:{chain.id}", payload=story_context(s, chain))
+        queue(s, "title", chain.id, f"title:{chain.id}", payload={"through_position": 0})
     notify(s, participant.user_id, chain.id, "Your turn! Add your part and pass it on.")
 
 

@@ -103,6 +103,7 @@ def main():
         assert not errors, errors
 
         page.get_by_role("button", name="Discover", exact=True).click()
+        expect(page.locator(".toast")).not_to_be_visible(timeout=8000)
         page.screenshot(path="/tmp/passit-desktop.png", full_page=True)
         page.set_viewport_size({"width": 390, "height": 844})
         page.evaluate("window.scrollTo(0, 0)")
