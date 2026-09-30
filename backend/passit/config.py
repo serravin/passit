@@ -5,13 +5,19 @@ from dataclasses import dataclass, field
 @dataclass
 class Settings:
     mode: str = field(default_factory=lambda: os.getenv("PASSIT_MODE", "demo"))
-    database_url: str = field(default_factory=lambda: os.getenv("PASSIT_DATABASE_URL", "sqlite:///./passit.db"))
+    database_url: str = field(
+        default_factory=lambda: os.getenv("PASSIT_DATABASE_URL", "sqlite:///./passit.db")
+    )
     origin: str = field(default_factory=lambda: os.getenv("PASSIT_ORIGIN", "http://localhost:5173"))
     issuer: str = field(default_factory=lambda: os.getenv("PASSIT_OIDC_ISSUER", ""))
     audience: str = field(default_factory=lambda: os.getenv("PASSIT_OIDC_AUDIENCE", ""))
     jwks_url: str = field(default_factory=lambda: os.getenv("PASSIT_OIDC_JWKS_URL", ""))
-    admin_subjects: set[str] = field(default_factory=lambda: set(filter(None, os.getenv("PASSIT_ADMIN_SUBJECTS", "").split(","))))
-    ai_allowed_hosts: set[str] = field(default_factory=lambda: set(filter(None, os.getenv("PASSIT_AI_ALLOWED_HOSTS", "").split(","))))
+    admin_subjects: set[str] = field(
+        default_factory=lambda: set(filter(None, os.getenv("PASSIT_ADMIN_SUBJECTS", "").split(",")))
+    )
+    ai_allowed_hosts: set[str] = field(
+        default_factory=lambda: set(filter(None, os.getenv("PASSIT_AI_ALLOWED_HOSTS", "").split(",")))
+    )
 
     def validate(self):
         if self.mode not in {"demo", "production"}:

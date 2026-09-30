@@ -15,10 +15,14 @@ from .models import (
 )
 
 MOTIVES = [
-    ("worse", "Make it worse", "💀"), ("twist", "Add a plot twist", "🤯"),
-    ("awkward", "Make it awkward", "😂"), ("absurd", "Make it absurd", "🌀"),
-    ("wholesome", "Make it wholesome", "❤️"), ("ruin", "Ruin the situation", "😈"),
-    ("save", "Save the situation", "🦸"), ("character", "Introduce a new character", "👤"),
+    ("worse", "Make it worse", "💀"),
+    ("twist", "Add a plot twist", "🤯"),
+    ("awkward", "Make it awkward", "😂"),
+    ("absurd", "Make it absurd", "🌀"),
+    ("wholesome", "Make it wholesome", "❤️"),
+    ("ruin", "Ruin the situation", "😈"),
+    ("save", "Save the situation", "🦸"),
+    ("character", "Introduce a new character", "👤"),
     ("end", "End the story", "🎬"),
 ]
 
@@ -31,11 +35,18 @@ def initialize(db, demo=False):
             if not s.get(Motive, mid):
                 s.add(Motive(id=mid, label=label, emoji=emoji))
         if demo and not s.scalar(select(User).where(User.issuer == "demo")):
-            users = [User(issuer="demo", subject=name.lower(), name=name, color=color, admin=i == 0)
-                     for i, (name, color) in enumerate([
-                         ("Alex", "#f3b949"), ("Sam", "#a78bfa"), ("Jamie", "#6ecbb3"),
-                         ("Morgan", "#f08fa6"), ("Riley", "#7fb8e8"),
-                     ])]
+            users = [
+                User(issuer="demo", subject=name.lower(), name=name, color=color, admin=i == 0)
+                for i, (name, color) in enumerate(
+                    [
+                        ("Alex", "#f3b949"),
+                        ("Sam", "#a78bfa"),
+                        ("Jamie", "#6ecbb3"),
+                        ("Morgan", "#f08fa6"),
+                        ("Riley", "#7fb8e8"),
+                    ]
+                )
+            ]
             s.add_all(users)
             s.flush()
             for user in users:
@@ -49,7 +60,9 @@ def initialize(db, demo=False):
             s.flush()
             s.add_all([GroupMember(group_id=group.id, user_id=u.id) for u in users[:4]])
         if demo and not s.get(AIAssignment, "default"):
-            profile = AIProfile(revision=1, status="active", provider="demo", model_reference="offline-demo-v1")
+            profile = AIProfile(
+                revision=1, status="active", provider="demo", model_reference="offline-demo-v1"
+            )
             s.add(profile)
             s.flush()
             s.add(AIAssignment(task="default", profile_id=profile.id))

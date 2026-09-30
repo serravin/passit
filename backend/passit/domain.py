@@ -58,8 +58,16 @@ def queue(s, task, aggregate, key, payload=None, available_at=None):
         if not assignment:
             fail("An administrator must activate an AI profile before starting a Chain", 503)
         profile_id = assignment.profile_id
-    s.add(WorkItem(task=task, aggregate_id=aggregate, key=key, profile_id=profile_id,
-                   payload=payload or {}, available_at=available_at or now()))
+    s.add(
+        WorkItem(
+            task=task,
+            aggregate_id=aggregate,
+            key=key,
+            profile_id=profile_id,
+            payload=payload or {},
+            available_at=available_at or now(),
+        )
+    )
     s.flush()
 
 
@@ -70,8 +78,12 @@ def notify(s, user_id, chain_id, message):
 
 
 def friends(s, user_id):
-    rows = s.scalars(select(Friendship).where(
-        (Friendship.left_id == user_id) | (Friendship.right_id == user_id), Friendship.status == "accepted"))
+    rows = s.scalars(
+        select(Friendship).where(
+            (Friendship.left_id == user_id) | (Friendship.right_id == user_id),
+            Friendship.status == "accepted",
+        )
+    )
     return {row.right_id if row.left_id == user_id else row.left_id for row in rows}
 
 
@@ -85,7 +97,9 @@ def validate_group(s, owner_id, member_ids):
 
 
 def launch(s, creator, data):
-    cap = s.scalar(select(PlatformSettings).where(PlatformSettings.id == 1).with_for_update()).max_participants_per_chain
+    cap = s.scalar(
+        select(PlatformSettings).where(PlatformSettings.id == 1).with_for_update()
+    ).max_participants_per_chain
     maximum = data.max_participants if data.max_participants is not None else min(5, cap)
     if not 2 <= data.min_participants <= maximum <= cap:
         fail(f"Use 2 ≤ minimum ≤ maximum ≤ {cap}", 422)
@@ -107,18 +121,33 @@ def launch(s, creator, data):
     elif data.group_mode == "random":
         if data.member_ids or data.source_group_id:
             fail("Random groups are chosen by the system", 422)
-        eligible = list(s.scalars(select(UserSettings.user_id).where(
-            UserSettings.allow_random_participation.is_(True), UserSettings.user_id != creator.id)))
+        eligible = list(
+            s.scalars(
+                select(UserSettings.user_id).where(
+                    UserSettings.allow_random_participation.is_(True), UserSettings.user_id != creator.id
+                )
+            )
+        )
         secrets.SystemRandom().shuffle(eligible)
-        members = set(eligible[:maximum - 1]) | {creator.id}
+        members = set(eligible[: maximum - 1]) | {creator.id}
     if data.group_mode != "saved_group" and data.source_group_id:
         fail("Source group applies only to saved groups", 422)
     if not data.min_participants <= len(members) <= maximum:
-        fail("Group size must fit the participant limits; larger saved groups require a subset or a higher maximum", 422)
-    chain = Chain(id=uid(), creator_id=creator.id, setup=data.setup, rules=data.rules,
-                  group_mode=data.group_mode, source_group_id=data.source_group_id,
-                  turn_timeout_seconds=data.turn_timeout_seconds,
-                  min_participants=data.min_participants, max_participants=maximum)
+        fail(
+            "Group size must fit the participant limits; larger saved groups require a subset or a higher maximum",
+            422,
+        )
+    chain = Chain(
+        id=uid(),
+        creator_id=creator.id,
+        setup=data.setup,
+        rules=data.rules,
+        group_mode=data.group_mode,
+        source_group_id=data.source_group_id,
+        turn_timeout_seconds=data.turn_timeout_seconds,
+        min_participants=data.min_participants,
+        max_participants=maximum,
+    )
     s.add(chain)
     s.flush()
     for user_id in members:
@@ -131,18 +160,36 @@ def launch(s, creator, data):
 
 
 def story_context(s, chain):
-    turns = list(s.scalars(select(Turn).where(Turn.chain_id == chain.id, Turn.status == "submitted").order_by(Turn.position)))
-    remaining = s.scalar(select(func.count()).select_from(Participant).where(
-        Participant.chain_id == chain.id, Participant.contributed.is_(False)))
-    return {"setup": chain.setup, "story": [chain.setup] + [t.text for t in turns],
-            "used_motives": [t.motive_id for t in turns], "remaining": remaining, "rules": chain.rules,
-            "eligible_motives": [m.id for m in s.scalars(select(Motive)) if remaining == 1 or m.id != "end"]}
+    turns = list(
+        s.scalars(
+            select(Turn).where(Turn.chain_id == chain.id, Turn.status == "submitted").order_by(Turn.position)
+        )
+    )
+    remaining = s.scalar(
+        select(func.count())
+        .select_from(Participant)
+        .where(Participant.chain_id == chain.id, Participant.contributed.is_(False))
+    )
+    return {
+        "setup": chain.setup,
+        "story": [chain.setup] + [t.text for t in turns],
+        "used_motives": [t.motive_id for t in turns],
+        "remaining": remaining,
+        "rules": chain.rules,
+        "eligible_motives": [m.id for m in s.scalars(select(Motive)) if remaining == 1 or m.id != "end"],
+    }
 
 
 def assign(s, chain, motive_id, timestamp=None):
-    if chain.status != "active" or s.scalar(select(Turn).where(Turn.chain_id == chain.id, Turn.status != "submitted")):
+    if chain.status != "active" or s.scalar(
+        select(Turn).where(Turn.chain_id == chain.id, Turn.status != "submitted")
+    ):
         return
-    eligible = list(s.scalars(select(Participant).where(Participant.chain_id == chain.id, Participant.contributed.is_(False))))
+    eligible = list(
+        s.scalars(
+            select(Participant).where(Participant.chain_id == chain.id, Participant.contributed.is_(False))
+        )
+    )
     if not eligible:
         chain.status = "completed"
         return
@@ -151,9 +198,15 @@ def assign(s, chain, motive_id, timestamp=None):
     participant = secrets.choice(eligible)
     timestamp = timestamp or now()
     position = s.scalar(select(func.count()).select_from(Turn).where(Turn.chain_id == chain.id)) + 1
-    turn = Turn(id=uid(), chain_id=chain.id, user_id=participant.user_id, position=position,
-                motive_id=motive_id, assigned_at=timestamp,
-                deadline_at=timestamp + timedelta(seconds=chain.turn_timeout_seconds))
+    turn = Turn(
+        id=uid(),
+        chain_id=chain.id,
+        user_id=participant.user_id,
+        position=position,
+        motive_id=motive_id,
+        assigned_at=timestamp,
+        deadline_at=timestamp + timedelta(seconds=chain.turn_timeout_seconds),
+    )
     s.add(turn)
     s.flush()
     queue(s, "suggestions", turn.id, f"suggestions:{turn.id}")
@@ -176,8 +229,11 @@ def complete_turn(s, chain, turn, text, assisted=False, generated=False, timesta
     turn.fallback_index = None
     s.get(Participant, (chain.id, turn.user_id)).contributed = True
     s.flush()
-    remaining = s.scalar(select(func.count()).select_from(Participant).where(
-        Participant.chain_id == chain.id, Participant.contributed.is_(False)))
+    remaining = s.scalar(
+        select(func.count())
+        .select_from(Participant)
+        .where(Participant.chain_id == chain.id, Participant.contributed.is_(False))
+    )
     if remaining:
         queue(s, "handoff", chain.id, f"handoff:{chain.id}:{turn.position}")
     else:
@@ -237,7 +293,9 @@ def publication(s, chain_id, user_id, decision, timestamp=None):
         chain.publication_requested_at = timestamp
         decision = "approved"
         for participant in s.scalars(select(Participant).where(Participant.chain_id == chain_id)):
-            notify(s, participant.user_id, chain_id, "Publication requested. Everyone must explicitly approve.")
+            notify(
+                s, participant.user_id, chain_id, "Publication requested. Everyone must explicitly approve."
+            )
     elif chain.publication_status != "awaiting_approvals":
         fail("Publication has not been requested")
     approval = s.get(Approval, (chain_id, user_id))
@@ -249,7 +307,11 @@ def publication(s, chain_id, user_id, decision, timestamp=None):
     if decision == "rejected":
         chain.publication_status = "rejected"
     else:
-        missing = s.scalar(select(func.count()).select_from(Approval).where(Approval.chain_id == chain_id, Approval.decision != "approved"))
+        missing = s.scalar(
+            select(func.count())
+            .select_from(Approval)
+            .where(Approval.chain_id == chain_id, Approval.decision != "approved")
+        )
         if missing == 0:
             chain.publication_status = "approved"
             chain.visibility = "published"

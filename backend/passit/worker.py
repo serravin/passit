@@ -21,26 +21,42 @@ class Worker:
 
     def reconcile(self):
         with self.db.transaction() as s:
-            for turn in s.scalars(select(Turn).where(Turn.status != "submitted", Turn.deadline_at <= now()).limit(100)):
+            for turn in s.scalars(
+                select(Turn).where(Turn.status != "submitted", Turn.deadline_at <= now()).limit(100)
+            ):
                 # Same lock order as human submission to prevent PostgreSQL deadlocks.
                 lock_chain(s, turn.chain_id)
                 timeout(s, turn.id)
-            for item in s.scalars(select(WorkItem).where(WorkItem.status == "processing", WorkItem.lease_until < now()).limit(100)):
+            for item in s.scalars(
+                select(WorkItem)
+                .where(WorkItem.status == "processing", WorkItem.lease_until < now())
+                .limit(100)
+            ):
                 item.status = "pending"
                 item.lease_token = None
             for chain in s.scalars(select(Chain).where(Chain.status == "active").limit(100)):
                 lock_chain(s, chain.id)
                 active = s.scalar(select(Turn).where(Turn.chain_id == chain.id, Turn.status != "submitted"))
                 if not active:
-                    previous = list(s.scalars(select(Turn).where(Turn.chain_id == chain.id).order_by(Turn.position)))
+                    previous = list(
+                        s.scalars(select(Turn).where(Turn.chain_id == chain.id).order_by(Turn.position))
+                    )
                     queue(s, "handoff", chain.id, f"handoff:{chain.id}:{len(previous)}")
 
     def claim(self):
         with self.db.transaction() as s:
-            item = s.scalar(select(WorkItem).where(
-                or_(and_(WorkItem.status == "pending", WorkItem.available_at <= now()),
-                    and_(WorkItem.status == "processing", WorkItem.lease_until < now()))
-            ).order_by(WorkItem.available_at).with_for_update(skip_locked=True).limit(1))
+            item = s.scalar(
+                select(WorkItem)
+                .where(
+                    or_(
+                        and_(WorkItem.status == "pending", WorkItem.available_at <= now()),
+                        and_(WorkItem.status == "processing", WorkItem.lease_until < now()),
+                    )
+                )
+                .order_by(WorkItem.available_at)
+                .with_for_update(skip_locked=True)
+                .limit(1)
+            )
             if not item:
                 return None
             item.status = "processing"
@@ -111,7 +127,7 @@ class Worker:
                     profile = s.get(AIProfile, item.profile_id) if item.profile_id else None
                     limit = profile.max_retries + 1 if profile else 4
                     item.status = "failed" if item.attempts >= limit else "pending"
-                    item.available_at = now() + timedelta(seconds=min(60, 2 ** item.attempts))
+                    item.available_at = now() + timedelta(seconds=min(60, 2**item.attempts))
                     item.error_code = code
                     item.lease_token = None
         return True

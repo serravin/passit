@@ -71,15 +71,22 @@ def create_app(settings=None, db=None):
     app.state.settings, app.state.db = settings, db
     if settings.mode == "production":
         app.state.jwks = jwt.PyJWKClient(settings.jwks_url)
-    app.add_middleware(CORSMiddleware, allow_origins=[settings.origin], allow_credentials=True,
-                       allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"], allow_headers=["Authorization", "Content-Type"])
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[settings.origin],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
     @app.middleware("http")
     async def protections(request, call_next):
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             origin = request.headers.get("origin")
             # Cookie-based demo commands require an allowed Origin; login also rejects cross-site requests.
-            if (origin and origin != settings.origin) or (request.cookies.get("passit_session") and not origin):
+            if (origin and origin != settings.origin) or (
+                request.cookies.get("passit_session") and not origin
+            ):
                 return JSONResponse({"detail": "Untrusted request origin"}, status_code=403)
         response = await call_next(request)
         response.headers["Cache-Control"] = "no-store"
@@ -96,15 +103,22 @@ def create_app(settings=None, db=None):
     def config():
         with db.sessions() as s:
             platform = s.get(PlatformSettings, 1)
-            return {"mode": settings.mode, "global_max_participants": platform.max_participants_per_chain,
-                    "motives": [{"id": m.id, "label": m.label, "emoji": m.emoji} for m in s.scalars(select(Motive))]}
+            return {
+                "mode": settings.mode,
+                "global_max_participants": platform.max_participants_per_chain,
+                "motives": [
+                    {"id": m.id, "label": m.label, "emoji": m.emoji} for m in s.scalars(select(Motive))
+                ],
+            }
 
     @app.get("/api/demo/accounts")
     def accounts():
         if settings.mode != "demo":
             fail("Not found", 404)
         with db.sessions() as s:
-            return [user_view(u) for u in s.scalars(select(User).where(User.issuer == "demo").order_by(User.name))]
+            return [
+                user_view(u) for u in s.scalars(select(User).where(User.issuer == "demo").order_by(User.name))
+            ]
 
     @app.post("/api/demo/login")
     def login(data: FriendInput, response: Response):
@@ -115,8 +129,17 @@ def create_app(settings=None, db=None):
             if not user or user.issuer != "demo":
                 fail("Account not found", 404)
             token = secrets.token_urlsafe(32)
-            s.add(LoginSession(token_hash=digest(token), user_id=user.id, expires_at=now() + timedelta(days=1)))
-            response.set_cookie("passit_session", token, httponly=True, samesite="lax", max_age=86400, secure=settings.origin.startswith("https://"))
+            s.add(
+                LoginSession(token_hash=digest(token), user_id=user.id, expires_at=now() + timedelta(days=1))
+            )
+            response.set_cookie(
+                "passit_session",
+                token,
+                httponly=True,
+                samesite="lax",
+                max_age=86400,
+                secure=settings.origin.startswith("https://"),
+            )
             return user_view(user)
 
     @app.post("/api/logout")
@@ -134,9 +157,15 @@ def create_app(settings=None, db=None):
     def me(user: CurrentUser):
         with db.sessions() as s:
             preferences = s.get(UserSettings, user.id)
-            return {**user_view(user), "admin": user.admin,
-                    "settings": {"allow_random_participation": preferences.allow_random_participation,
-                                 "notifications_enabled": preferences.notifications_enabled, "language": preferences.language}}
+            return {
+                **user_view(user),
+                "admin": user.admin,
+                "settings": {
+                    "allow_random_participation": preferences.allow_random_participation,
+                    "notifications_enabled": preferences.notifications_enabled,
+                    "language": preferences.language,
+                },
+            }
 
     @app.put("/api/me/settings")
     def preferences(data: Preferences, user: CurrentUser):
@@ -150,16 +179,34 @@ def create_app(settings=None, db=None):
     def friend_list(user: CurrentUser):
         with db.sessions() as s:
             accepted = friends(s, user.id)
-            pending = list(s.scalars(select(Friendship).where(
-                or_(Friendship.left_id == user.id, Friendship.right_id == user.id), Friendship.status == "pending")))
-            return {"friends": [user_view(s.get(User, uid)) for uid in sorted(accepted)],
-                    "requests": [{**user_view(s.get(User, f.right_id if f.left_id == user.id else f.left_id)),
-                                  "incoming": f.requested_by != user.id} for f in pending]}
+            pending = list(
+                s.scalars(
+                    select(Friendship).where(
+                        or_(Friendship.left_id == user.id, Friendship.right_id == user.id),
+                        Friendship.status == "pending",
+                    )
+                )
+            )
+            return {
+                "friends": [user_view(s.get(User, uid)) for uid in sorted(accepted)],
+                "requests": [
+                    {
+                        **user_view(s.get(User, f.right_id if f.left_id == user.id else f.left_id)),
+                        "incoming": f.requested_by != user.id,
+                    }
+                    for f in pending
+                ],
+            }
 
     @app.get("/api/users")
     def user_search(user: CurrentUser, q: str = Query(min_length=2, max_length=80)):
         with db.sessions() as s:
-            return [user_view(u) for u in s.scalars(select(User).where(User.name.ilike(f"%{q}%"), User.id != user.id).limit(20))]
+            return [
+                user_view(u)
+                for u in s.scalars(
+                    select(User).where(User.name.ilike(f"%{q}%"), User.id != user.id).limit(20)
+                )
+            ]
 
     @app.post("/api/friends")
     def request_friend(data: FriendInput, user: CurrentUser):
@@ -194,13 +241,23 @@ def create_app(settings=None, db=None):
         return {"ok": True}
 
     def group_view(s, group):
-        return {"id": group.id, "name": group.name, "owner_id": group.owner_id,
-                "members": [user_view(s.get(User, m.user_id)) for m in s.scalars(select(GroupMember).where(GroupMember.group_id == group.id))]}
+        return {
+            "id": group.id,
+            "name": group.name,
+            "owner_id": group.owner_id,
+            "members": [
+                user_view(s.get(User, m.user_id))
+                for m in s.scalars(select(GroupMember).where(GroupMember.group_id == group.id))
+            ],
+        }
 
     @app.get("/api/groups")
     def groups(user: CurrentUser):
         with db.sessions() as s:
-            return [group_view(s, g) for g in s.scalars(select(Group).join(GroupMember).where(GroupMember.user_id == user.id))]
+            return [
+                group_view(s, g)
+                for g in s.scalars(select(Group).join(GroupMember).where(GroupMember.user_id == user.id))
+            ]
 
     @app.post("/api/groups")
     def create_group(data: GroupInput, user: CurrentUser):
@@ -246,8 +303,16 @@ def create_app(settings=None, db=None):
     @app.get("/api/chains")
     def my_chains(user: CurrentUser):
         with db.sessions() as s:
-            return [chain_view(s, c, user.id) for c in s.scalars(select(Chain).join(Participant).where(
-                Participant.user_id == user.id).order_by(Chain.created_at.desc()).limit(100))]
+            return [
+                chain_view(s, c, user.id)
+                for c in s.scalars(
+                    select(Chain)
+                    .join(Participant)
+                    .where(Participant.user_id == user.id)
+                    .order_by(Chain.created_at.desc())
+                    .limit(100)
+                )
+            ]
 
     @app.post("/api/chains", status_code=201)
     def new_chain(data: Launch, user: CurrentUser):
@@ -278,15 +343,27 @@ def create_app(settings=None, db=None):
         if category not in {"trending", "new", "awkward", "absurd", "twist"}:
             fail("Unknown discovery category", 422)
         with db.sessions() as s:
-            query = select(Chain).where(Chain.status == "completed", Chain.visibility == "published", Chain.publication_status == "approved")
+            query = select(Chain).where(
+                Chain.status == "completed",
+                Chain.visibility == "published",
+                Chain.publication_status == "approved",
+            )
             if category in {"awkward", "absurd", "twist"}:
                 query = query.where(Chain.id.in_(select(Turn.chain_id).where(Turn.motive_id == category)))
             if category == "trending":
-                count = select(func.count()).select_from(Like).where(Like.chain_id == Chain.id).correlate(Chain).scalar_subquery()
+                count = (
+                    select(func.count())
+                    .select_from(Like)
+                    .where(Like.chain_id == Chain.id)
+                    .correlate(Chain)
+                    .scalar_subquery()
+                )
                 query = query.order_by(count.desc(), Chain.published_at.desc())
             else:
                 query = query.order_by(Chain.published_at.desc())
-            return [chain_view(s, c, user.id if user else None) for c in s.scalars(query.offset(offset).limit(30))]
+            return [
+                chain_view(s, c, user.id if user else None) for c in s.scalars(query.offset(offset).limit(30))
+            ]
 
     def change_like(s, target, target_id, user, add):
         if target == "chains":
@@ -325,13 +402,28 @@ def create_app(settings=None, db=None):
     @app.get("/api/notifications")
     def notifications(user: CurrentUser):
         with db.sessions() as s:
-            return [{"id": n.id, "chain_id": n.chain_id, "message": n.message, "read": n.read, "created_at": date(n.created_at)}
-                    for n in s.scalars(select(Notification).where(Notification.user_id == user.id).order_by(Notification.created_at.desc()).limit(50))]
+            return [
+                {
+                    "id": n.id,
+                    "chain_id": n.chain_id,
+                    "message": n.message,
+                    "read": n.read,
+                    "created_at": date(n.created_at),
+                }
+                for n in s.scalars(
+                    select(Notification)
+                    .where(Notification.user_id == user.id)
+                    .order_by(Notification.created_at.desc())
+                    .limit(50)
+                )
+            ]
 
     @app.post("/api/notifications/read")
     def read_notifications(user: CurrentUser):
         with db.transaction() as s:
-            for notification in s.scalars(select(Notification).where(Notification.user_id == user.id, Notification.read.is_(False))):
+            for notification in s.scalars(
+                select(Notification).where(Notification.user_id == user.id, Notification.read.is_(False))
+            ):
                 notification.read = True
         return {"ok": True}
 
@@ -350,18 +442,39 @@ def create_app(settings=None, db=None):
     @app.get("/api/admin")
     def admin_state(user: Admin):
         with db.sessions() as s:
-            profiles = [{"id": p.id, "revision": p.revision, "status": p.status, "validated_at": date(p.validated_at),
-                         **{k: getattr(p, k) for k in ProfileInput.model_fields}}
-                        for p in s.scalars(select(AIProfile).order_by(AIProfile.revision.desc()))]
-            work = [{"id": w.id, "task": w.task, "attempts": w.attempts, "error_code": w.error_code, "status": w.status}
-                    for w in s.scalars(select(WorkItem).where(WorkItem.status == "failed").limit(100))]
-            return {"max_participants_per_chain": s.get(PlatformSettings, 1).max_participants_per_chain,
-                    "profiles": profiles, "assignments": {a.task: a.profile_id for a in s.scalars(select(AIAssignment))}, "failed_work": work}
+            profiles = [
+                {
+                    "id": p.id,
+                    "revision": p.revision,
+                    "status": p.status,
+                    "validated_at": date(p.validated_at),
+                    **{k: getattr(p, k) for k in ProfileInput.model_fields},
+                }
+                for p in s.scalars(select(AIProfile).order_by(AIProfile.revision.desc()))
+            ]
+            work = [
+                {
+                    "id": w.id,
+                    "task": w.task,
+                    "attempts": w.attempts,
+                    "error_code": w.error_code,
+                    "status": w.status,
+                }
+                for w in s.scalars(select(WorkItem).where(WorkItem.status == "failed").limit(100))
+            ]
+            return {
+                "max_participants_per_chain": s.get(PlatformSettings, 1).max_participants_per_chain,
+                "profiles": profiles,
+                "assignments": {a.task: a.profile_id for a in s.scalars(select(AIAssignment))},
+                "failed_work": work,
+            }
 
     @app.put("/api/admin/platform")
     def update_platform(data: PlatformInput, user: Admin):
         with db.transaction() as s:
-            s.get(PlatformSettings, 1, with_for_update=True).max_participants_per_chain = data.max_participants_per_chain
+            s.get(
+                PlatformSettings, 1, with_for_update=True
+            ).max_participants_per_chain = data.max_participants_per_chain
         return data
 
     @app.post("/api/admin/profiles", status_code=201)
@@ -370,7 +483,11 @@ def create_app(settings=None, db=None):
             fail("Demo profiles cannot be used in production", 422)
         if data.provider == "azure_openai":
             endpoint = urlsplit(data.endpoint)
-            if endpoint.scheme != "https" or endpoint.hostname not in settings.ai_allowed_hosts or not data.deployment_name:
+            if (
+                endpoint.scheme != "https"
+                or endpoint.hostname not in settings.ai_allowed_hosts
+                or not data.deployment_name
+            ):
                 fail("Use an approved AI endpoint and deployment", 422)
         with db.transaction() as s:
             s.get(PlatformSettings, 1, with_for_update=True)
@@ -386,14 +503,24 @@ def create_app(settings=None, db=None):
             profile = s.get(AIProfile, profile_id)
             if not profile:
                 fail("Profile not found", 404)
-            context = {"setup": "The office printer declared itself mayor.", "story": ["The office printer declared itself mayor."],
-                       "used_motives": [], "remaining": 2, "rules": "", "eligible_motives": ["worse", "awkward"], "motive_id": "awkward"}
+            context = {
+                "setup": "The office printer declared itself mayor.",
+                "story": ["The office printer declared itself mayor."],
+                "used_motives": [],
+                "remaining": 2,
+                "rules": "",
+                "eligible_motives": ["worse", "awkward"],
+                "motive_id": "awkward",
+            }
             try:
                 adapter = CreativeAI(settings)
                 for task in ("handoff", "suggestions", "title", "setup"):
                     adapter.generate(profile, task, context)
             except Exception as exc:
-                fail(f"AI validation failed ({type(exc).__name__}); check connectivity and model parameters", 422)
+                fail(
+                    f"AI validation failed ({type(exc).__name__}); check connectivity and model parameters",
+                    422,
+                )
         with db.transaction() as s:
             s.get(AIProfile, profile_id).validated_at = now()
         return {"validated": True}

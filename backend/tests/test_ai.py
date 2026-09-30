@@ -15,7 +15,11 @@ def test_motive_and_suggestion_schema_validation():
 
 def test_azure_endpoint_is_approved_before_any_credential_access():
     adapter = CreativeAI(Settings(ai_allowed_hosts={"example.openai.azure.com"}))
-    for endpoint in ("http://example.openai.azure.com", "https://evil.example", "https://user:password@example.openai.azure.com"):
+    for endpoint in (
+        "http://example.openai.azure.com",
+        "https://evil.example",
+        "https://user:password@example.openai.azure.com",
+    ):
         profile = AIProfile(provider="azure_openai", endpoint=endpoint)
         with pytest.raises(ValueError):
             adapter.azure(profile, "title", {})

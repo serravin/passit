@@ -102,7 +102,10 @@ class Chain(Base):
     turn_timeout_seconds: Mapped[int] = mapped_column(Integer, default=900)
     min_participants: Mapped[int] = mapped_column(Integer, default=2)
     max_participants: Mapped[int] = mapped_column(Integer, default=5)
-    __table_args__ = (CheckConstraint("2 <= min_participants AND min_participants <= max_participants"), CheckConstraint("turn_timeout_seconds > 0"))
+    __table_args__ = (
+        CheckConstraint("2 <= min_participants AND min_participants <= max_participants"),
+        CheckConstraint("turn_timeout_seconds > 0"),
+    )
 
 
 class Participant(Base):
@@ -136,8 +139,15 @@ class Turn(Base):
     suggestions: Mapped[list | None] = mapped_column(JSON)
     fallback_index: Mapped[int | None] = mapped_column(Integer)
     __table_args__ = (
-        UniqueConstraint("chain_id", "position"), UniqueConstraint("chain_id", "user_id"),
-        Index("one_active_turn", "chain_id", unique=True, sqlite_where=(status != "submitted"), postgresql_where=(status != "submitted")),
+        UniqueConstraint("chain_id", "position"),
+        UniqueConstraint("chain_id", "user_id"),
+        Index(
+            "one_active_turn",
+            "chain_id",
+            unique=True,
+            sqlite_where=(status != "submitted"),
+            postgresql_where=(status != "submitted"),
+        ),
         CheckConstraint("NOT (ai_assisted AND ai_generated)"),
     )
 
@@ -157,8 +167,11 @@ class Like(Base):
     chain_id: Mapped[str | None] = mapped_column(ForeignKey("chains.id"))
     turn_id: Mapped[str | None] = mapped_column(ForeignKey("turns.id"))
     __table_args__ = (
-        CheckConstraint("(chain_id IS NOT NULL AND turn_id IS NULL) OR (chain_id IS NULL AND turn_id IS NOT NULL)"),
-        UniqueConstraint("user_id", "chain_id"), UniqueConstraint("user_id", "turn_id"),
+        CheckConstraint(
+            "(chain_id IS NOT NULL AND turn_id IS NULL) OR (chain_id IS NULL AND turn_id IS NOT NULL)"
+        ),
+        UniqueConstraint("user_id", "chain_id"),
+        UniqueConstraint("user_id", "turn_id"),
     )
 
 
@@ -191,6 +204,7 @@ class AIAssignment(Base):
 
 class WorkItem(Base):
     """Transactional outbox with durable local delivery; replace transport with Service Bus on Azure."""
+
     __tablename__ = "work_items"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     key: Mapped[str] = mapped_column(String(200), unique=True)

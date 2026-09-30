@@ -103,12 +103,17 @@ def test_delayed_preparation_uses_exact_fallback_and_rejects_late_human(game):
         assert turn.deadline_at.replace(tzinfo=deadline.tzinfo) == deadline
         assert s.get(Chain, cid).status == "completed"
         timeout(s, tid)  # duplicate deadline delivery
-    assert client.post(f"/api/chains/{cid}/turns/{tid}/submit", json={"text": "Replacement"}).status_code == 409
+    assert (
+        client.post(f"/api/chains/{cid}/turns/{tid}/submit", json={"text": "Replacement"}).status_code == 409
+    )
     login(client, users[0])
     client.post(f"/api/chains/{cid}/publication", json={"decision": "request"})
     assert client.get(f"/api/chains/{cid}").json()["visibility"] == "participants_only"
     login(client, users[1])  # timed-out participant's explicit approval is still necessary
-    assert client.post(f"/api/chains/{cid}/publication", json={"decision": "approved"}).json()["visibility"] == "published"
+    assert (
+        client.post(f"/api/chains/{cid}/publication", json={"decision": "approved"}).json()["visibility"]
+        == "published"
+    )
 
 
 def test_double_submission_and_duplicate_handoff(game):
@@ -118,6 +123,7 @@ def test_double_submission_and_duplicate_handoff(game):
     with db.sessions() as s:
         turn = s.scalar(select(Turn).where(Turn.chain_id == cid))
         tid, user_id = turn.id, turn.user_id
+
     def send(text):
         try:
             with db.transaction() as s:
@@ -125,6 +131,7 @@ def test_double_submission_and_duplicate_handoff(game):
             return "saved"
         except HTTPException as error:
             return error.status_code
+
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(send, ["First", "Second"]))
     assert sorted(str(x) for x in results) == ["409", "saved"]
@@ -135,7 +142,14 @@ def test_double_submission_and_duplicate_handoff(game):
     drain(worker)
     with db.sessions() as s:
         assert s.scalar(select(func.count()).select_from(Turn).where(Turn.chain_id == cid)) == 2
-        assert s.scalar(select(func.count()).select_from(Participant).where(Participant.chain_id == cid, Participant.contributed.is_(True))) == 2
+        assert (
+            s.scalar(
+                select(func.count())
+                .select_from(Participant)
+                .where(Participant.chain_id == cid, Participant.contributed.is_(True))
+            )
+            == 2
+        )
 
 
 def test_human_submission_timeout_race_and_exact_deadline(game):
@@ -146,17 +160,23 @@ def test_human_submission_timeout_race_and_exact_deadline(game):
         turn = s.scalar(select(Turn).where(Turn.chain_id == cid))
         tid, user_id, deadline = turn.id, turn.user_id, turn.deadline_at
     from passit.domain import utc
+
     deadline = utc(deadline)
+
     def human():
         try:
             with db.transaction() as s:
-                submit(s, cid, tid, user_id, "I made it.", False, timestamp=deadline - timedelta(microseconds=1))
+                submit(
+                    s, cid, tid, user_id, "I made it.", False, timestamp=deadline - timedelta(microseconds=1)
+                )
             return True
         except HTTPException:
             return False
+
     def ai_timeout():
         with db.transaction() as s:
             timeout(s, tid, timestamp=deadline)
+
     with ThreadPoolExecutor(max_workers=2) as pool:
         human_future = pool.submit(human)
         timeout_future = pool.submit(ai_timeout)
@@ -169,11 +189,18 @@ def test_human_submission_timeout_race_and_exact_deadline(game):
         assert s.scalar(select(func.count()).select_from(Turn)) == 1
 
 
-@pytest.mark.parametrize("changes", [
-    {"member_ids": []}, {"min_participants": 6, "max_participants": 5},
-    {"max_participants": 21}, {"turn_timeout_seconds": 0}, {"title": "Not allowed"},
-    {"motive_id": "worse"}, {"visibility": "published"},
-])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"member_ids": []},
+        {"min_participants": 6, "max_participants": 5},
+        {"max_participants": 21},
+        {"turn_timeout_seconds": 0},
+        {"title": "Not allowed"},
+        {"motive_id": "worse"},
+        {"visibility": "published"},
+    ],
+)
 def test_launch_validation(game, changes):
     client, _, _, users = game
     login(client, users[0])
@@ -203,8 +230,15 @@ def test_random_optin_and_admin_default_cap(game):
 def test_group_snapshot_and_oversize_not_truncated(game):
     client, _, _, users = game
     login(client, users[0])
-    group = client.post("/api/groups", json={"name": "Friends", "member_ids": [u.id for u in users[1:4]]}).json()
-    payload = {"setup": "A premise", "group_mode": "saved_group", "source_group_id": group["id"], "max_participants": 3}
+    group = client.post(
+        "/api/groups", json={"name": "Friends", "member_ids": [u.id for u in users[1:4]]}
+    ).json()
+    payload = {
+        "setup": "A premise",
+        "group_mode": "saved_group",
+        "source_group_id": group["id"],
+        "max_participants": 3,
+    }
     assert client.post("/api/chains", json=payload).status_code == 422
     response = client.post("/api/chains", json={**payload, "member_ids": [users[1].id]})
     assert response.status_code == 201
@@ -224,7 +258,10 @@ def test_suggestions_edit_flag_and_unauthorized_submission(game):
     login(client, users[1])
     turn = client.get(f"/api/chains/{cid}").json()["turns"][0]
     assert len(turn["suggestions"]) == 3
-    response = client.post(f"/api/chains/{cid}/turns/{tid}/submit", json={"text": turn["suggestions"][0] + " Edited.", "ai_assisted": True})
+    response = client.post(
+        f"/api/chains/{cid}/turns/{tid}/submit",
+        json={"text": turn["suggestions"][0] + " Edited.", "ai_assisted": True},
+    )
     assert response.status_code == 200
     assert response.json()["turns"][0]["ai_assisted"]
     with db.sessions() as s:
@@ -235,7 +272,9 @@ def test_profile_validation_revision_pinning_and_dead_letter(game):
     client, db, worker, users = game
     cid = launch(client, users)["id"]
     login(client, users[0])
-    created = client.post("/api/admin/profiles", json={"provider": "demo", "model_reference": "demo-v2"}).json()
+    created = client.post(
+        "/api/admin/profiles", json={"provider": "demo", "model_reference": "demo-v2"}
+    ).json()
     profile_id = created["id"]
     assert client.post(f"/api/admin/profiles/{profile_id}/activate", json={}).status_code == 422
     assert client.post(f"/api/admin/profiles/{profile_id}/validate").status_code == 200
@@ -244,9 +283,11 @@ def test_profile_validation_revision_pinning_and_dead_letter(game):
         item = s.scalar(select(WorkItem).where(WorkItem.aggregate_id == cid))
         assert item.profile_id != profile_id
         assert s.get(AIAssignment, "default").profile_id == profile_id
+
     class BrokenAI:
         def generate(self, *args):
             raise ValueError("private story must not leak")
+
     worker.ai = BrokenAI()
     for _ in range(4):
         worker.run_once()
@@ -258,6 +299,7 @@ def test_profile_validation_revision_pinning_and_dead_letter(game):
     assert "private story" not in str(state)
     assert client.post(f"/api/admin/work/{state['failed_work'][0]['id']}/retry").status_code == 200
     from passit.ai import CreativeAI
+
     worker.ai = CreativeAI(client.app.state.settings)
     drain(worker)
     assert client.get(f"/api/chains/{cid}").json()["turns"]
@@ -281,5 +323,10 @@ def test_cookie_csrf_and_auth_requirements(game):
     client, _, _, users = game
     assert client.get("/api/me").status_code == 401
     login(client, users[0])
-    assert client.post("/api/chains", json={"setup": "Bad origin"}, headers={"Origin": "https://evil.example"}).status_code == 403
+    assert (
+        client.post(
+            "/api/chains", json={"setup": "Bad origin"}, headers={"Origin": "https://evil.example"}
+        ).status_code
+        == 403
+    )
     assert client.post("/api/chains", json={"setup": "No origin"}, headers={"Origin": ""}).status_code == 403

@@ -12,7 +12,7 @@ class Launch(Input):
     rules: str = Field(default="", max_length=500)
     group_mode: Literal["friends", "saved_group", "random"] = "friends"
     source_group_id: str | None = None
-    member_ids: list[str] = Field(default_factory=list, max_length=19)
+    member_ids: list[str] = Field(default_factory=list, max_length=99)
     turn_timeout_seconds: int = Field(default=900, gt=0, le=604800)
     min_participants: int = Field(default=2, ge=2)
     max_participants: int | None = Field(default=None, ge=2)

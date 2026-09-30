@@ -27,14 +27,26 @@ def authenticate(request: Request, optional=False):
             try:
                 token = header[7:]
                 key = app.state.jwks.get_signing_key_from_jwt(token).key
-                claims = jwt.decode(token, key, algorithms=["RS256"], audience=settings.audience,
-                                    issuer=settings.issuer, options={"require": ["exp", "iss", "sub", "aud"]})
+                claims = jwt.decode(
+                    token,
+                    key,
+                    algorithms=["RS256"],
+                    audience=settings.audience,
+                    issuer=settings.issuer,
+                    options={"require": ["exp", "iss", "sub", "aud"]},
+                )
             except (jwt.PyJWTError, ValueError):
                 raise HTTPException(401, "Invalid sign-in token") from None
             with db.transaction() as s:
-                user = s.scalar(select(User).where(User.issuer == claims["iss"], User.subject == claims["sub"]))
+                user = s.scalar(
+                    select(User).where(User.issuer == claims["iss"], User.subject == claims["sub"])
+                )
                 if not user:
-                    user = User(issuer=claims["iss"], subject=claims["sub"], name=str(claims.get("name", "Storyteller"))[:80])
+                    user = User(
+                        issuer=claims["iss"],
+                        subject=claims["sub"],
+                        name=str(claims.get("name", "Storyteller"))[:80],
+                    )
                     s.add(user)
                     s.flush()
                     s.add(UserSettings(user_id=user.id))

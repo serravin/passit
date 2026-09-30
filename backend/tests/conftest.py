@@ -16,6 +16,7 @@ def game(tmp_path):
     db = Database(url)
     if os.getenv("PASSIT_TEST_DATABASE_URL"):
         from passit.models import Base
+
         Base.metadata.drop_all(db.engine)
     settings = Settings(database_url=url)
     app = create_app(settings, db)
@@ -34,8 +35,11 @@ def login(client, user):
 
 def launch(client, users, **options):
     login(client, users[0])
-    payload = {"setup": "The hotel gave me a crown instead of a room key.",
-               "member_ids": [u.id for u in users[1:3]], **options}
+    payload = {
+        "setup": "The hotel gave me a crown instead of a room key.",
+        "member_ids": [u.id for u in users[1:3]],
+        **options,
+    }
     response = client.post("/api/chains", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
@@ -57,6 +61,9 @@ def finish(client, worker, users, chain_id):
             assert chain["status"] == "completed"
             return chain
         login(client, next(u for u in users if u.id == active["user"]["id"]))
-        response = client.post(f"/api/chains/{chain_id}/turns/{active['id']}/submit", json={"text": "The crown requested a performance review."})
+        response = client.post(
+            f"/api/chains/{chain_id}/turns/{active['id']}/submit",
+            json={"text": "The crown requested a performance review."},
+        )
         assert response.status_code == 200, response.text
     raise AssertionError("Chain did not finish")

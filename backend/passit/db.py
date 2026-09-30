@@ -17,6 +17,7 @@ class Database:
         self.engine = create_engine(url, **options)
         self.sessions = sessionmaker(self.engine, expire_on_commit=False)
         if url.startswith("sqlite"):
+
             @event.listens_for(self.engine, "connect")
             def configure(connection, _):
                 connection.execute("PRAGMA foreign_keys=ON")
