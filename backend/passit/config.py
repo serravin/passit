@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
 
 @dataclass
@@ -18,6 +19,16 @@ class Settings:
     ai_allowed_hosts: set[str] = field(
         default_factory=lambda: set(filter(None, os.getenv("PASSIT_AI_ALLOWED_HOSTS", "").split(",")))
     )
+
+    @property
+    def allowed_origins(self) -> set[str]:
+        origins = {self.origin}
+        parsed = urlsplit(self.origin)
+        if self.mode == "demo" and parsed.hostname in {"localhost", "127.0.0.1"}:
+            alias = "127.0.0.1" if parsed.hostname == "localhost" else "localhost"
+            port = f":{parsed.port}" if parsed.port is not None else ""
+            origins.add(f"{parsed.scheme}://{alias}{port}")
+        return origins
 
     def validate(self):
         if self.mode not in {"demo", "production"}:

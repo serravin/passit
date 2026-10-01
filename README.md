@@ -4,6 +4,8 @@ Stories nobody writes alone. A responsive React client, FastAPI API, SQLAlchemy 
 
 ## Test locally with Docker
 
+The demo accepts both `http://localhost:8080` and `http://127.0.0.1:8080`. Origin checks require the configured scheme and port; production accepts only `PASSIT_ORIGIN`.
+
 With Docker Desktop (or Docker Engine and Compose v2) running:
 
 ```sh

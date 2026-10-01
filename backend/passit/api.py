@@ -73,7 +73,7 @@ def create_app(settings=None, db=None):
         app.state.jwks = jwt.PyJWKClient(settings.jwks_url)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[settings.origin],
+        allow_origins=sorted(settings.allowed_origins),
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
@@ -84,7 +84,7 @@ def create_app(settings=None, db=None):
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             origin = request.headers.get("origin")
             # Cookie-based demo commands require an allowed Origin; login also rejects cross-site requests.
-            if (origin and origin != settings.origin) or (
+            if (origin and origin not in settings.allowed_origins) or (
                 request.cookies.get("passit_session") and not origin
             ):
                 return JSONResponse({"detail": "Untrusted request origin"}, status_code=403)
