@@ -1,0 +1,57 @@
+name: Application checks
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: passit
+          POSTGRES_PASSWORD: local-ci-only
+          POSTGRES_DB: passit_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U passit -d passit_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.19'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: uv sync --frozen --extra dev --python 3.12
+      - run: npm --prefix frontend ci
+      - run: .venv/bin/ruff check backend
+      - run: .venv/bin/pytest -q
+      - name: PostgreSQL concurrency tests
+        run: .venv/bin/pytest -q
+        env:
+          # This database is dedicated to tests and recreated by the fixture.
+          PASSIT_TEST_DATABASE_URL: postgresql+psycopg://passit:local-ci-only@localhost:5432/passit_test
+      - run: npm --prefix frontend run build
+      - run: .venv/bin/playwright install --with-deps chromium
+      - name: Browser workflow
+        shell: bash
+        run: |
+          bash scripts/install.sh
+          bash scripts/dev.sh > /tmp/passit-dev.log 2>&1 &
+          dev_pid=$!
+          trap 'kill "$dev_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://localhost:5173/api/config > /dev/null; then break; fi
+            sleep 1
+          done
+          .venv/bin/python backend/tests/browser_smoke.py
+          .venv/bin/python backend/tests/browser_languages.py

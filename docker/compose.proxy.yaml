@@ -1,0 +1,18 @@
+# Optional managed-cloud build override. This is not needed on normal local machines.
+services:
+  api:
+    build:
+      secrets:
+        - proxy_ca
+  worker:
+    build:
+      secrets:
+        - proxy_ca
+  web:
+    build:
+      secrets:
+        - proxy_ca
+
+secrets:
+  proxy_ca:
+    file: /etc/ssl/certs/ca-certificates.crt
