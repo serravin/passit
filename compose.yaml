@@ -1,0 +1,66 @@
+name: passit
+
+x-backend: &backend
+  image: passit-api:local
+  build:
+    context: .
+    dockerfile: docker/api.Dockerfile
+  environment:
+    PASSIT_MODE: demo
+    PASSIT_DATABASE_URL: sqlite:////data/passit.db
+    PASSIT_ORIGIN: http://localhost:${PASSIT_DOCKER_PORT:-8080}
+  volumes:
+    - stories:/data
+  networks:
+    - local
+  read_only: true
+  tmpfs:
+    - /tmp:size=32m,mode=1777
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  init: true
+
+services:
+  api:
+    <<: *backend
+    command: ["sh", "-c", "alembic upgrade head && python -m passit.manage seed && exec uvicorn passit.api:app --host 0.0.0.0 --port 8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:8000/api/config', timeout=5)"]
+      interval: 5s
+      timeout: 6s
+      start_period: 20s
+      retries: 12
+  worker:
+    <<: *backend
+    command: ["python", "-m", "passit.worker"]
+    depends_on:
+      api:
+        condition: service_healthy
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+    ports:
+      - "127.0.0.1:${PASSIT_DOCKER_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - local
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    init: true
+
+volumes:
+  stories:
+
+networks:
+  local:
+    internal: true
