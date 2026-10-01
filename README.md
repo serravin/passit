@@ -20,6 +20,12 @@ The images contain the application dependencies; you do not need to install Pyth
 
 On 1 October 2026, `npm audit` reported zero known advisories in the locked JavaScript dependencies, and `pip-audit` reported none in the 34 applicable Python runtime dependencies. These checks do not establish that all software is harmless, detect every malicious package, or audit the operating-system packages in the base images. Compose configuration was validated; the image build could not be executed in the cloud environment because Docker Hub downloads were rate-limited and the alternate registry was blocked. Keep Docker and base images updated; this Compose file is a local demo, not a production deployment.
 
+## Languages
+
+The interface supports English, German, French, and Italian. Use the language selector in the header for an immediate change, or choose a language in Settings and save preferences. Guests start with their browser’s supported language; explicit choices persist in the browser. Signed-in players save their choice to their account, which takes precedence at sign-in.
+
+Navigation, game controls, forms, notifications, Motives, accessibility labels, and admin screens are translated. Story titles, contributions, rules, and group names retain their original text. Switching the interface language does not translate stored AI continuations; the local demo generator still supplies English samples. Translation catalogs are in `frontend/src/locales/`; English UI strings act as keys and fallbacks. No extra runtime dependencies are required.
+
 ## Local development
 
 Requires Python 3.12+, [uv](https://docs.astral.sh/uv/), and Node.js 22+.
@@ -49,16 +55,17 @@ The creator's setup counts as their one contribution. Human submission and passi
 npm --prefix frontend run build
 ```
 
-All 24 backend tests have been run against SQLite and PostgreSQL 17, including concurrent human submissions, timeout races, duplicate jobs, expired leases, concurrent workers/reconcilers, publication decisions, private reads, and production JWT validation. PostgreSQL tests require a **dedicated disposable database**: fixtures recreate its application tables. Set `PASSIT_TEST_DATABASE_URL` to its SQLAlchemy URL, then run the same pytest command.
+All 33 backend tests have been run against SQLite and PostgreSQL 17, including concurrent human submissions, timeout races, duplicate jobs, expired leases, concurrent workers/reconcilers, publication decisions, private reads, and production JWT validation. PostgreSQL tests require a **dedicated disposable database**: fixtures recreate its application tables. Set `PASSIT_TEST_DATABASE_URL` to its SQLAlchemy URL, then run the same pytest command.
 
 To exercise the complete UI, leave the development API, worker and web server running, install a Playwright Chromium browser (or set `PLAYWRIGHT_CHROMIUM_PATH` to your existing Chromium), then run:
 
 ```sh
 .venv/bin/playwright install chromium
 .venv/bin/python backend/tests/browser_smoke.py
+.venv/bin/python backend/tests/browser_languages.py
 ```
 
-The smoke test creates fictional demo stories and verifies creation, suggestion editing, draft retention, passing, separate publication approvals, discovery, outsider access, and the mobile layout. It saves screenshots under `/tmp`. The CI workflow runs backend tests on both databases, a client build, and this browser workflow; the workflow itself has not run on GitHub yet.
+The smoke test creates fictional demo stories and verifies creation, suggestion editing, draft retention, passing, separate publication approvals, discovery, outsider access, and the mobile layout. It saves screenshots under `/tmp`. The language smoke test checks all three translations, responsive layouts, saved preferences, account switching, draft retention, notifications, and error messages. The CI workflow runs backend tests on both databases, a client build, and both browser workflows; these checks have been validated locally.
 
 ## Implementation and deployment boundaries
 

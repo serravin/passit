@@ -54,3 +54,4 @@ jobs:
             sleep 1
           done
           .venv/bin/python backend/tests/browser_smoke.py
+          .venv/bin/python backend/tests/browser_languages.py

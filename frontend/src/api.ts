@@ -1,3 +1,4 @@
+import type { Language } from "./i18n";
 import { UserManager, WebStorageStateStore } from "oidc-client-ts";
 
 const base = import.meta.env.VITE_API_URL || "";
@@ -37,7 +38,7 @@ export async function api<T>(
       typeof data.detail === "string"
         ? data.detail
         : Array.isArray(data.detail)
-          ? data.detail.map((d: { msg: string }) => d.msg).join("; ")
+          ? "Please check the form and try again."
           : "Something went wrong";
     throw new Error(message);
   }
@@ -50,7 +51,7 @@ export type Me = Person & {
   settings: {
     allow_random_participation: boolean;
     notifications_enabled: boolean;
-    language: string;
+    language: Language;
   };
 };
 export type Motive = { id: string; label: string; emoji: string };
@@ -82,6 +83,7 @@ export type Turn = {
 export type Chain = {
   id: string;
   title: string;
+  title_pending: boolean;
   setup: string;
   rules: string;
   creator_id: string;

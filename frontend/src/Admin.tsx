@@ -1,3 +1,4 @@
+import { t, translateError, errorMessage } from "./i18n";
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import { Check, RotateCcw, Settings, Sparkles } from "lucide-react";
@@ -66,7 +67,7 @@ export default function Admin({
         }
       })
       .catch((e) => {
-        if (alive) setError(e.message);
+        if (alive) setError(errorMessage(e));
       });
     return () => {
       alive = false;
@@ -87,15 +88,16 @@ export default function Admin({
   }
   return (
     <section className="page">
-      <span className="eyebrow">BEHIND THE STORIES</span>
-      <h1>Platform configuration.</h1>
+      <span className="eyebrow">{t("BEHIND THE STORIES")}</span>
+      <h1>{t("Platform configuration.")}</h1>
       <p className="page-intro">
-        Manage participant limits, versioned AI profiles, and failed background
-        work.
+        {t(
+          "Manage participant limits, versioned AI profiles, and failed background work.",
+        )}{" "}
       </p>
       {error && (
         <div className="alert" role="alert">
-          {error}
+          {translateError(error)}
         </div>
       )}
       <div className="admin-layout">
@@ -115,10 +117,10 @@ export default function Admin({
           >
             <h2>
               <Settings size={20} />
-              Participant limit
+              {t("Participant limit")}{" "}
             </h2>
             <label className="field">
-              Global maximum
+              {t("Global maximum")}{" "}
               <input
                 type="number"
                 min={2}
@@ -128,34 +130,36 @@ export default function Admin({
               />
             </label>
             <p className="help">
-              Applies at launch. Existing active Chains keep their settings.
+              {t(
+                "Applies at launch. Existing active Chains keep their settings.",
+              )}{" "}
             </p>
             <button className="button secondary">
-              Save limit
-              <Check size={16} />
+              {t("Save limit")} <Check size={16} />
             </button>
           </form>
           <section className="panel">
-            <h2>Profile revisions</h2>
+            <h2>{t("Profile revisions")}</h2>
             <p className="help">
-              Validate connectivity and all four output schemas before
-              activation. Queued work retains its resolved revision.
+              {t(
+                "Validate connectivity and all four output schemas before activation. Queued work retains its resolved revision.",
+              )}{" "}
             </p>
             {state?.profiles.map((p) => (
               <article className="profile-revision" key={p.id}>
                 <div>
                   <h3>
-                    Revision {p.revision}{" "}
+                    {t("Revision")} {p.revision}{" "}
                     <span className="status">{p.provider}</span>
                   </h3>
                   <p>
                     {p.model_reference ||
                       p.deployment_name ||
-                      "No model reference"}
+                      t("No model reference")}
                   </p>
                   <p className="help">
-                    {p.endpoint || "Local sample generator"} ·{" "}
-                    {p.validated_at ? "Validated" : "Not validated"}
+                    {p.endpoint || t("Local sample generator")} ·{" "}
+                    {p.validated_at ? t("Validated") : t("Not validated")}
                   </p>
                 </div>
                 <div className="profile-controls">
@@ -171,10 +175,12 @@ export default function Admin({
                       setBusy(false);
                     }}
                   >
-                    Validate
+                    {t("Validate")}{" "}
                   </button>
                   <select
-                    aria-label={`Activate revision ${p.revision} for a task`}
+                    aria-label={t("Activate revision {number} for a task", {
+                      number: p.revision,
+                    })}
                     defaultValue=""
                     disabled={busy || !p.validated_at}
                     onChange={(e) => {
@@ -185,12 +191,15 @@ export default function Admin({
                             api(`/admin/profiles/${p.id}/activate`, "POST", {
                               task,
                             }),
-                          `Revision ${p.revision} activated for ${task}.`,
+                          t("Revision {number} activated for {task}.", {
+                            number: p.revision,
+                            task: t(task),
+                          }),
                         );
                       e.target.value = "";
                     }}
                   >
-                    <option value="">Activate for…</option>
+                    <option value="">{t("Activate for…")}</option>
                     {[
                       "default",
                       "handoff",
@@ -198,29 +207,32 @@ export default function Admin({
                       "title",
                       "setup",
                     ].map((task) => (
-                      <option key={task}>{task}</option>
+                      <option key={task} value={task}>
+                        {t(task)}
+                      </option>
                     ))}
                   </select>
                 </div>
                 <p className="help">
-                  Active for:{" "}
+                  {t("Active for:")}{" "}
                   {Object.entries(state.assignments)
                     .filter(([, id]) => id === p.id)
-                    .map(([task]) => task)
-                    .join(", ") || "none"}
+                    .map(([task]) => t(task))
+                    .join(", ") || t("none")}
                 </p>
               </article>
             ))}
           </section>
           <section className="panel">
-            <h2>Failed work</h2>
+            <h2>{t("Failed work")}</h2>
             {state?.failed_work.length ? (
               state.failed_work.map((w) => (
                 <div className="failed-work" key={w.id}>
                   <div>
-                    <strong>{w.task}</strong>
+                    <strong>{t(w.task)}</strong>
                     <p className="help">
-                      {w.attempts} attempts · {w.error_code}
+                      {t("{count} attempts", { count: w.attempts })} ·{" "}
+                      {w.error_code}
                     </p>
                   </div>
                   <button
@@ -233,22 +245,22 @@ export default function Admin({
                     }
                   >
                     <RotateCcw size={15} />
-                    Retry
+                    {t("Retry")}{" "}
                   </button>
                 </div>
               ))
             ) : (
-              <p className="help">No failed work items.</p>
+              <p className="help">{t("No failed work items.")}</p>
             )}
           </section>
         </div>
         <form className="panel" onSubmit={save}>
           <h2>
             <Sparkles size={20} />
-            New AI revision
+            {t("New AI revision")}{" "}
           </h2>
           <label className="field">
-            Provider
+            {t("Provider")}{" "}
             <select
               value={profile.provider}
               onChange={(e) =>
@@ -256,11 +268,11 @@ export default function Admin({
               }
             >
               <option value="azure_openai">Azure OpenAI</option>
-              <option value="demo">Local demo (development only)</option>
+              <option value="demo">{t("Local demo (development only)")}</option>
             </select>
           </label>
           <label className="field">
-            Approved HTTPS endpoint
+            {t("Approved HTTPS endpoint")}{" "}
             <input
               type="url"
               placeholder="https://your-resource.openai.azure.com"
@@ -272,7 +284,7 @@ export default function Admin({
             />
           </label>
           <label className="field">
-            Deployment name
+            {t("Deployment name")}{" "}
             <input
               value={profile.deployment_name}
               required={profile.provider === "azure_openai"}
@@ -282,7 +294,7 @@ export default function Admin({
             />
           </label>
           <label className="field">
-            Model / version reference
+            {t("Model / version reference")}{" "}
             <input
               value={profile.model_reference}
               onChange={(e) =>
@@ -291,7 +303,7 @@ export default function Admin({
             />
           </label>
           <label className="field">
-            API version
+            {t("API version")}{" "}
             <input
               value={profile.api_version}
               required
@@ -301,25 +313,26 @@ export default function Admin({
             />
           </label>
           <label className="field">
-            Authentication
+            {t("Authentication")}{" "}
             <select
               value={profile.auth_mode}
               onChange={(e) =>
                 setProfile({ ...profile, auth_mode: e.target.value })
               }
             >
-              <option value="managed_identity">Managed identity</option>
+              <option value="managed_identity">{t("Managed identity")}</option>
               <option value="environment_reference">
-                Server environment reference
+                {t("Server environment reference")}{" "}
               </option>
             </select>
           </label>
           <p className="help">
-            Key authentication reads PASSIT_AI_API_KEY on the server. Enter no
-            secret values here.
+            {t(
+              "Key authentication reads PASSIT_AI_API_KEY on the server. Enter no secret values here.",
+            )}{" "}
           </p>
           <label className="field">
-            Generation parameters (JSON)
+            {t("Generation parameters (JSON)")}{" "}
             <textarea
               rows={3}
               value={parameters}
@@ -327,12 +340,13 @@ export default function Admin({
             />
           </label>
           <p className="help">
-            Supported: max_completion_tokens or max_tokens, and temperature.
-            Choose options your model accepts.
+            {t(
+              "Supported: max_completion_tokens or max_tokens, and temperature. Choose options your model accepts.",
+            )}{" "}
           </p>
           <div className="field-row">
             <label className="field">
-              Request timeout
+              {t("Request timeout")}{" "}
               <input
                 type="number"
                 min={1}
@@ -347,7 +361,7 @@ export default function Admin({
               />
             </label>
             <label className="field">
-              Retries
+              {t("Retries")}{" "}
               <input
                 type="number"
                 min={0}
@@ -363,8 +377,7 @@ export default function Admin({
             </label>
           </div>
           <button className="button primary full" disabled={busy}>
-            Create revision
-            <Check size={17} />
+            {t("Create revision")} <Check size={17} />
           </button>
         </form>
       </div>

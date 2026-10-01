@@ -30,7 +30,7 @@ class Decision(Input):
 class Preferences(Input):
     allow_random_participation: bool
     notifications_enabled: bool
-    language: Literal["en"] = "en"
+    language: Literal["en", "de", "fr", "it"] = "en"
 
 
 class GroupInput(Input):

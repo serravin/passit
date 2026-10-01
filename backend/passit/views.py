@@ -25,6 +25,7 @@ def chain_view(s, chain, viewer, detail=False):
     result = {
         "id": chain.id,
         "title": chain.title or "Untitled Chain",
+        "title_pending": not bool(chain.title),
         "setup": chain.setup,
         "rules": chain.rules,
         "creator_id": chain.creator_id,

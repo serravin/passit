@@ -112,7 +112,7 @@ main {
   padding: 0 32px;
   display: flex;
   align-items: center;
-  gap: 54px;
+  gap: 32px;
 }
 .brand {
   display: flex;
@@ -291,7 +291,7 @@ main {
 }
 .hero {
   display: grid;
-  grid-template-columns: 1.15fr 1fr;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
   gap: 40px;
   padding: 62px 0 50px;
   min-height: 564px;
@@ -318,7 +318,7 @@ main {
   font-size: 49px;
   letter-spacing: -2px;
   color: var(--orange);
-  white-space: nowrap;
+  white-space: normal;
 }
 .hero-copy > p {
   font-size: 14px;
@@ -327,6 +327,7 @@ main {
 }
 .hero-buttons {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 28px;
 }
@@ -1737,7 +1738,7 @@ footer > span:last-child {
     margin-top: 20px;
   }
   .hero-art {
-    height: 430px;
+    height: 470px;
     max-width: 410px;
     width: 100%;
     margin: 0 auto;
@@ -1999,5 +2000,78 @@ footer > span:last-child {
   * {
     scroll-behavior: auto !important;
     transition: none !important;
+  }
+}
+
+.language-selector {
+  width: 96px;
+  min-height: 36px;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+}
+@media (max-width: 760px) {
+  .language-selector {
+    width: 78px;
+    font-size: 11px;
+    padding: 4px;
+  }
+  .header-actions .new-chain-button {
+    width: 36px;
+    padding: 8px;
+  }
+  .new-chain-button span {
+    display: none;
+  }
+  .starburst {
+    font-size: 15px;
+    padding: 14px;
+    line-height: 1.2;
+  }
+}
+@media (max-width: 420px) {
+  .header .brand-icon {
+    display: none;
+  }
+}
+
+.hero-copy {
+  min-width: 0;
+}
+@media (max-width: 760px) {
+  .hero {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .continuation {
+    left: 15%;
+  }
+  .art-caption {
+    right: 0;
+  }
+}
+@media (min-width: 761px) and (max-width: 960px) {
+  .header-inner {
+    gap: 15px;
+  }
+  .header nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: #f7f5effa;
+    height: 62px;
+    border-top: 1px solid var(--line);
+    justify-content: space-evenly;
+    z-index: 30;
+  }
+  .header nav button {
+    height: 62px;
+  }
+  body {
+    padding-bottom: 62px;
   }
 }

@@ -1,3 +1,12 @@
+import {
+  t,
+  translateError,
+  errorMessage,
+  useLanguage,
+  setLanguage,
+  languages,
+  supportedLanguage,
+} from "./i18n";
 import { useCallback, useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import {
@@ -74,6 +83,11 @@ export function Empty({
 }
 
 export default function App() {
+  const language = useLanguage();
+  const [languageBusy, setLanguageBusy] = useState(false);
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
   const [route, setRoute] = useState(routeNow);
   const [config, setConfig] = useState<Config | null>(null);
   const [me, setMe] = useState<Me | null>(null);
@@ -99,7 +113,7 @@ export default function App() {
       if (message) setToast(message);
       return true;
     } catch (e) {
-      setError((e as Error).message);
+      setError(errorMessage(e));
       return false;
     }
   };
@@ -135,12 +149,15 @@ export default function App() {
           setAccounts(await api<Person[]>("/demo/accounts"));
         try {
           const user = await api<Me>("/me");
-          if (alive) setMe(user);
+          if (alive) {
+            setMe(user);
+            setLanguage(user.settings.language);
+          }
         } catch {
           if (alive) setMe(null);
         }
       } catch (e) {
-        if (alive) setError((e as Error).message);
+        if (alive) setError(errorMessage(e));
       } finally {
         if (alive) setReady(true);
       }
@@ -173,7 +190,9 @@ export default function App() {
     if (
       await action(async () => {
         await api("/demo/login", "POST", { user_id: person.id });
-        setMe(await api<Me>("/me"));
+        const user = await api<Me>("/me");
+        setMe(user);
+        setLanguage(user.settings.language);
       })
     )
       setLoginOpen(false);
@@ -185,6 +204,22 @@ export default function App() {
     else if (identity) void identity.signinRedirect();
     else setError("Sign-in has not been configured for this deployment.");
   }
+  async function changeLanguage(value: string) {
+    const selected = supportedLanguage(value);
+    if (!selected) return;
+    setLanguage(selected);
+    if (!me) return;
+    setLanguageBusy(true);
+    try {
+      await api("/me/settings", "PUT", { ...me.settings, language: selected });
+      setMe({ ...me, settings: { ...me.settings, language: selected } });
+    } catch (e) {
+      setLanguage(me.settings.language);
+      setError(errorMessage(e));
+    } finally {
+      setLanguageBusy(false);
+    }
+  }
   const unread = notices.filter((n) => !n.read).length;
   return (
     <>
@@ -193,7 +228,7 @@ export default function App() {
           <button
             className="brand"
             onClick={() => navigate("discover")}
-            aria-label="PassIt home"
+            aria-label={t("PassIt home")}
           >
             <span className="brand-icon">
               <ArrowUpRight size={23} />
@@ -201,34 +236,47 @@ export default function App() {
             pass<span>it</span>
             <i>®</i>
           </button>
-          <nav aria-label="Main navigation">
+          <nav aria-label={t("Main navigation")}>
             <button
               className={route === "discover" ? "active" : ""}
               onClick={() => navigate("discover")}
             >
               <Compass size={17} />
-              Discover
+              {t("Discover")}{" "}
             </button>
             <button
               className={route === "chains" ? "active" : ""}
               onClick={() => requireLogin("chains")}
             >
               <Shuffle size={17} />
-              My chains
+              {t("My chains")}{" "}
             </button>
             <button
               className={route === "groups" ? "active" : ""}
               onClick={() => requireLogin("groups")}
             >
               <Users size={17} />
-              My people
+              {t("My people")}{" "}
             </button>
           </nav>
           <div className="header-actions">
+            <select
+              className="language-selector"
+              aria-label={t("Language")}
+              value={language}
+              disabled={languageBusy}
+              onChange={(e) => void changeLanguage(e.target.value)}
+            >
+              {languages.map((item) => (
+                <option key={item.code} value={item.code} lang={item.code}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
             {me && (
               <button
                 className="icon-button notification-button"
-                aria-label="Notifications"
+                aria-label={t("Notifications")}
                 onClick={() => {
                   setNoticeOpen(!noticeOpen);
                   if (!noticeOpen)
@@ -240,23 +288,24 @@ export default function App() {
               </button>
             )}
             <button
-              className="button primary compact"
+              className="button primary compact new-chain-button"
+              aria-label={t("New chain")}
               onClick={() => requireLogin("create")}
             >
               <Plus size={17} />
-              New chain
+              <span>{t("New chain")}</span>
             </button>
             {me ? (
               <button
                 className="profile-button"
                 onClick={() => navigate("settings")}
-                aria-label="Your settings"
+                aria-label={t("Your settings")}
               >
                 <Avatar person={me} small />
               </button>
             ) : (
               <button className="text-button" onClick={() => requireLogin()}>
-                Sign in <ArrowRight size={15} />
+                {t("Sign in")} <ArrowRight size={15} />
               </button>
             )}
           </div>
@@ -264,9 +313,11 @@ export default function App() {
       </header>
       {config?.mode === "demo" && (
         <div className="demo-bar">
-          Local demo · fictional accounts & sample AI continuations{" "}
+          {t("Local demo · fictional accounts & sample AI continuations")}{" "}
           <button onClick={() => setLoginOpen(true)}>
-            {me ? `Playing as ${me.name} · Switch player` : "Choose a player"}{" "}
+            {me
+              ? t("Playing as {name} · Switch player", { name: me.name })
+              : t("Choose a player")}{" "}
             <ChevronDown size={13} />
           </button>
         </div>
@@ -274,10 +325,10 @@ export default function App() {
       {noticeOpen && (
         <div className="notification-panel">
           <div className="section-heading">
-            <h3>Updates</h3>
+            <h3>{t("Updates")}</h3>
             <button
               className="icon-button"
-              aria-label="Close notifications"
+              aria-label={t("Close notifications")}
               onClick={() => setNoticeOpen(false)}
             >
               <X size={18} />
@@ -292,29 +343,32 @@ export default function App() {
                   setNoticeOpen(false);
                 }}
               >
-                {n.message}
+                {t(n.message)}
                 <ArrowRight size={14} />
               </button>
             ))
           ) : (
-            <p>You’re all caught up.</p>
+            <p>{t("You’re all caught up.")}</p>
           )}
         </div>
       )}
       <main>
         {error && (
           <div className="alert" role="alert">
-            {error}
-            <button aria-label="Dismiss error" onClick={() => setError("")}>
+            {translateError(error)}
+            <button
+              aria-label={t("Dismiss error")}
+              onClick={() => setError("")}
+            >
               <X size={16} />
             </button>
           </div>
         )}
         {!ready ? (
-          <div className="loading">Getting the next chapter ready…</div>
+          <div className="loading">{t("Getting the next chapter ready…")}</div>
         ) : !config ? (
-          <Empty icon={<Shuffle />} title="Unable to connect">
-            <p>Check that the API is running, then reload.</p>
+          <Empty icon={<Shuffle />} title={t("Unable to connect")}>
+            <p>{t("Check that the API is running, then reload.")}</p>
           </Empty>
         ) : route.startsWith("story/") ? (
           <Story
@@ -333,10 +387,10 @@ export default function App() {
             create={() => requireLogin("create")}
           />
         ) : !me ? (
-          <Empty icon={<Users />} title="Your story starts here">
-            <p>Sign in to create a Chain and play with friends.</p>
+          <Empty icon={<Users />} title={t("Your story starts here")}>
+            <p>{t("Sign in to create a Chain and play with friends.")}</p>
             <button className="button primary" onClick={() => requireLogin()}>
-              Choose a player <ArrowRight size={17} />
+              {t("Choose a player")} <ArrowRight size={17} />
             </button>
           </Empty>
         ) : route.startsWith("create") ? (
@@ -372,13 +426,13 @@ export default function App() {
       </main>
       <footer>
         <span className="footer-brand">passit</span>
-        <span>Stories nobody writes alone.</span>
-        <span>Made for a little more unexpected.</span>
+        <span>{t("Stories nobody writes alone.")}</span>
+        <span>{t("Made for a little more unexpected.")}</span>
       </footer>
       {toast && (
         <div className="toast" role="status">
           <Check size={18} />
-          {toast}
+          {t(toast)}
         </div>
       )}
       {loginOpen && (
@@ -392,22 +446,23 @@ export default function App() {
           >
             <button
               className="modal-close icon-button"
-              aria-label="Close player picker"
+              aria-label={t("Close player picker")}
               onClick={() => setLoginOpen(false)}
             >
               <X />
             </button>
-            <span className="eyebrow">THE DEMO CAST</span>
-            <h2 id="login-title">Who’s telling the story?</h2>
+            <span className="eyebrow">{t("THE DEMO CAST")}</span>
+            <h2 id="login-title">{t("Who’s telling the story?")}</h2>
             <p>
-              Switch between players to try a complete round. Each fictional
-              account has its own turn and publication decision.
+              {t(
+                "Switch between players to try a complete round. Each fictional account has its own turn and publication decision.",
+              )}{" "}
             </p>
             <div className="account-list">
               {accounts.map((person) => (
                 <button
                   key={person.id}
-                  aria-label={`Play as ${person.name}`}
+                  aria-label={t("Play as {name}", { name: person.name })}
                   onClick={() => void signIn(person)}
                 >
                   <Avatar person={person} />
@@ -451,7 +506,7 @@ function Discover({
         if (alive) setStories(data);
       })
       .catch((e) => {
-        if (alive) setError(e.message);
+        if (alive) setError(errorMessage(e));
       })
       .finally(() => {
         if (alive) setLoaded(true);
@@ -465,23 +520,21 @@ function Discover({
       <section className="hero">
         <div className="hero-copy">
           <span className="eyebrow">
-            <span className="mini-star">✳</span> A LITTLE CHAOS. A GREAT STORY.
+            <span className="mini-star">✳</span>{" "}
+            {t("A LITTLE CHAOS. A GREAT STORY.")}{" "}
           </span>
           <h1>
-            One story.
-            <br />
-            Many minds.
-            <br />
-            <em>Zero idea what’s next.</em>
+            {t("One story.")} <br />
+            {t("Many minds.")} <br />
+            <em>{t("Zero idea what’s next.")}</em>
           </h1>
           <p>
-            Start with a sentence. Pass it to a friend.
-            <br />
-            See where a little collective imagination takes you.
+            {t("Start with a sentence. Pass it to a friend.")} <br />
+            {t("See where a little collective imagination takes you.")}{" "}
           </p>
           <div className="hero-buttons">
             <button className="button primary" onClick={create}>
-              Start a chain <ArrowUpRight size={19} />
+              {t("Start a chain")} <ArrowUpRight size={19} />
             </button>
             <a
               className="text-button"
@@ -493,7 +546,7 @@ function Discover({
                   ?.scrollIntoView({ behavior: "smooth" });
               }}
             >
-              How it works <ArrowDown size={16} />
+              {t("How it works")} <ArrowDown size={16} />
             </a>
           </div>
           <div className="hero-footnote">
@@ -502,37 +555,36 @@ function Discover({
               <i>S</i>
               <i>J</i>
             </span>
-            <span>Better stories. Together.</span>
+            <span>{t("Better stories. Together.")}</span>
           </div>
         </div>
-        <div className="hero-art" aria-label="A story passes between friends">
-          <div className="scribble">the plot thickens ↴</div>
+        <div
+          className="hero-art"
+          aria-label={t("A story passes between friends")}
+        >
+          <div className="scribble">{t("the plot thickens ↴")}</div>
           <article className="floating-card premise">
             <span className="paper-label">
-              THE SETUP <span>01</span>
+              {t("THE SETUP")} <span>01</span>
             </span>
-            <p>“The hotel handed me a crown instead of a room key.”</p>
+            <p>{t("“The hotel handed me a crown instead of a room key.”")}</p>
             <span className="paper-author">
-              <i>A</i> Alex started something…
+              <i>A</i> {t("Alex started something…")}{" "}
             </span>
           </article>
           <div className="pass-arrow">
             <ArrowDown size={38} />
           </div>
           <article className="floating-card continuation">
-            <span className="motive-sticker">🤯 ADD A PLOT TWIST</span>
-            <p>“Apparently, ‘king-sized’ wasn’t about the bed.”</p>
+            <span className="motive-sticker">{t("🤯 ADD A PLOT TWIST")}</span>
+            <p>{t("“Apparently, ‘king-sized’ wasn’t about the bed.”")}</p>
             <span className="paper-author">
-              <i>S</i> Sam made it interesting.
+              <i>S</i> {t("Sam made it interesting.")}{" "}
             </span>
           </article>
-          <div className="starburst">
-            your
-            <br />
-            turn!
-          </div>
+          <div className="starburst">{t("Your turn!")}</div>
           <span className="art-caption">
-            Two minds. One very questionable holiday.
+            {t("Two minds. One very questionable holiday.")}{" "}
           </span>
         </div>
       </section>
@@ -540,16 +592,16 @@ function Discover({
         <div className="section-heading">
           <div>
             <span className="eyebrow">
-              STRAIGHT FROM THE COLLECTIVE IMAGINATION
+              {t("STRAIGHT FROM THE COLLECTIVE IMAGINATION")}{" "}
             </span>
-            <h2>The stories that made it.</h2>
+            <h2>{t("The stories that made it.")}</h2>
           </div>
           <span className="subtle-label">
             <LockKeyhole size={14} />
-            Shared only when everyone agrees
+            {t("Shared only when everyone agrees")}{" "}
           </span>
         </div>
-        <div className="tabs" role="tablist" aria-label="Story categories">
+        <div className="tabs" role="tablist" aria-label={t("Story categories")}>
           {categories.map((c) => (
             <button
               role="tab"
@@ -558,15 +610,15 @@ function Discover({
               className={category === c.id ? "selected" : ""}
               onClick={() => setCategory(c.id)}
             >
-              {c.label}
+              {t(c.label)}
             </button>
           ))}
         </div>
         {!loaded ? (
-          <div className="loading">Finding good stories…</div>
+          <div className="loading">{t("Finding good stories…")}</div>
         ) : error ? (
           <div className="alert" role="alert">
-            {error}
+            {translateError(error)}
           </div>
         ) : stories.length ? (
           <div className="story-grid">
@@ -582,50 +634,55 @@ function Discover({
         ) : (
           <Empty
             icon={<Sparkles size={26} />}
-            title="The next great story could be yours."
+            title={t("The next great story could be yours.")}
           >
             <p>
               {category === "trending" || category === "new"
-                ? "Finished Chains appear here once every player approves publication."
-                : "No published stories in this category yet."}
+                ? t(
+                    "Finished Chains appear here once every player approves publication.",
+                  )
+                : t("No published stories in this category yet.")}
             </p>
             <button className="text-button" onClick={create}>
-              Get your friends in on it <ArrowRight size={16} />
+              {t("Get your friends in on it")} <ArrowRight size={16} />
             </button>
           </Empty>
         )}
       </section>
       <section className="how-it-works" id="how-it-works">
         <div>
-          <span className="eyebrow">THE PLAN IS TO HAVE NO PLAN</span>
+          <span className="eyebrow">{t("THE PLAN IS TO HAVE NO PLAN")}</span>
           <h2>
-            A good story is
-            <br />a group effort.
+            {t("A good story is")} <br />
+            {t("a group effort.")}{" "}
           </h2>
         </div>
         <div className="how-steps">
           <article>
             <span>01</span>
-            <h3>Set the scene.</h3>
+            <h3>{t("Set the scene.")}</h3>
             <p>
-              A curious sentence. A few friends. That’s all it takes to start a
-              Chain.
+              {t(
+                "A curious sentence. A few friends. That’s all it takes to start a Chain.",
+              )}{" "}
             </p>
           </article>
           <article>
             <span>02</span>
-            <h3>Follow the twist.</h3>
+            <h3>{t("Follow the twist.")}</h3>
             <p>
-              AI picks a comic direction. You add your part, then pass to a
-              random friend.
+              {t(
+                "AI picks a comic direction. You add your part, then pass to a random friend.",
+              )}{" "}
             </p>
           </article>
           <article>
             <span>03</span>
-            <h3>Enjoy the finale.</h3>
+            <h3>{t("Enjoy the finale.")}</h3>
             <p>
-              Everyone gets one contribution. Share the story when the whole
-              group agrees.
+              {t(
+                "Everyone gets one contribution. Share the story when the whole group agrees.",
+              )}{" "}
             </p>
           </article>
         </div>
@@ -651,21 +708,21 @@ function StoryCard({
       <div className="card-top">
         <span className={`status ${story.your_turn ? "turn" : ""}`}>
           {story.your_turn
-            ? "Your turn"
+            ? t("Your turn")
             : story.status === "active"
-              ? "In progress"
+              ? t("In progress")
               : story.visibility === "published"
-                ? "Published"
-                : "Finished · for your group"}
+                ? t("Published")
+                : t("Finished · for your group")}
         </span>
         <ArrowUpRight size={20} />
       </div>
-      <h3>{story.title}</h3>
+      <h3>{story.title_pending ? t("Untitled Chain") : story.title}</h3>
       <p>“{story.setup}”</p>
       <div className="card-meta">
         <span>
           <Users size={15} />
-          {story.participant_count} players
+          {t("{count} players", { count: story.participant_count })}
         </span>
         <span>
           <Heart size={15} />
@@ -673,7 +730,7 @@ function StoryCard({
         </span>
         <span>
           <Shuffle size={15} />
-          {story.pass_count} passes
+          {t("{count} passes", { count: story.pass_count })}
         </span>
       </div>
       {story.status === "active" && (
@@ -713,7 +770,7 @@ function MyChains({
           }
         })
         .catch((e) => {
-          if (alive) setError(e.message);
+          if (alive) setError(errorMessage(e));
         });
     void load();
     const timer = setInterval(load, 4000);
@@ -733,30 +790,33 @@ function MyChains({
     <section className="page">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">YOUR LITTLE CORNER OF CHAOS</span>
+          <span className="eyebrow">{t("YOUR LITTLE CORNER OF CHAOS")}</span>
           <h1>
-            Hey, {me.name}. <em>What’s the story?</em>
+            {t("Hey, {name}.", { name: me.name })}{" "}
+            <em>{t("What’s the story?")}</em>
           </h1>
-          <p>Pick up where your friends left off, or start something new.</p>
+          <p>
+            {t("Pick up where your friends left off, or start something new.")}
+          </p>
         </div>
         <button className="button primary" onClick={() => navigate("create")}>
           <Plus size={18} />
-          New chain
+          {t("New chain")}{" "}
         </button>
       </div>
       <div className="tabs">
         {[
-          ["all", "All chains"],
-          ["turn", "Your turn"],
-          ["active", "In progress"],
-          ["completed", "Finished"],
+          ["all", t("All chains")],
+          ["turn", t("Your turn")],
+          ["active", t("In progress")],
+          ["completed", t("Finished")],
         ].map(([id, label]) => (
           <button
             key={id}
             className={filter === id ? "selected" : ""}
             onClick={() => setFilter(id)}
           >
-            {label}
+            {t(label)}
             {id === "turn" && (
               <span className="count">
                 {chains.filter((c) => c.your_turn).length}
@@ -766,9 +826,9 @@ function MyChains({
         ))}
       </div>
       {error ? (
-        <div className="alert">{error}</div>
+        <div className="alert">{translateError(error)}</div>
       ) : !loaded ? (
-        <div className="loading">Loading your chains…</div>
+        <div className="loading">{t("Loading your chains…")}</div>
       ) : shown.length ? (
         <div className="story-grid">
           {shown.map((c, i) => (
@@ -780,17 +840,17 @@ function MyChains({
           icon={<Shuffle size={27} />}
           title={
             filter === "turn"
-              ? "The story is in someone else’s hands."
-              : "Every good story starts somewhere."
+              ? t("The story is in someone else’s hands.")
+              : t("Every good story starts somewhere.")
           }
         >
           <p>
             {filter === "turn"
-              ? "We’ll let you know when it’s your turn."
-              : "Create a Chain and see what your friends come up with."}
+              ? t("We’ll let you know when it’s your turn.")
+              : t("Create a Chain and see what your friends come up with.")}
           </p>
           <button className="button primary" onClick={() => navigate("create")}>
-            Start a chain <ArrowRight size={17} />
+            {t("Start a chain")} <ArrowRight size={17} />
           </button>
         </Empty>
       )}
@@ -887,14 +947,16 @@ function Create({
     <section className="page narrow">
       <button className="back-link" onClick={() => navigate("chains")}>
         <ArrowLeft size={16} />
-        My chains
+        {t("My chains")}{" "}
       </button>
-      <span className="eyebrow">SET SOMETHING IN MOTION</span>
+      <span className="eyebrow">{t("SET SOMETHING IN MOTION")}</span>
       <h1>
-        A sentence is <em>all it takes.</em>
+        {t("A sentence is")} <em>{t("all it takes.")}</em>
       </h1>
       <p className="page-intro">
-        You set the scene. Your friends take it somewhere unexpected.
+        {t(
+          "You set the scene. Your friends take it somewhere unexpected.",
+        )}{" "}
       </p>
       <form onSubmit={send} className="create-layout">
         <div className="form-main">
@@ -903,11 +965,12 @@ function Create({
               <span className="step-number" aria-hidden="true">
                 1
               </span>
-              Set the scene
+              {t("Set the scene")}{" "}
             </label>
             <p className="field-description">
-              Give everyone a jumping-off point. Keep it short and leave room
-              for trouble.
+              {t(
+                "Give everyone a jumping-off point. Keep it short and leave room for trouble.",
+              )}{" "}
             </p>
             <textarea
               id="setup"
@@ -915,7 +978,9 @@ function Create({
               maxLength={1500}
               value={setup}
               onChange={(e) => setSetup(e.target.value)}
-              placeholder="I woke up in a hotel room and had no idea how I got there…"
+              placeholder={t(
+                "I woke up in a hotel room and had no idea how I got there…",
+              )}
               rows={5}
             />
             <div className="textarea-footer">
@@ -937,24 +1002,28 @@ function Create({
                 }}
               >
                 <Sparkles size={15} />
-                {helping ? "Finding a premise…" : "Give me a starting point"}
+                {helping
+                  ? t("Finding a premise…")
+                  : t("Give me a starting point")}
               </button>
               <span>{setup.length}/1500</span>
             </div>
             <p className="help">
-              Your setup is your contribution. AI creates the title after the
-              first pass.
+              {t(
+                "Your setup is your contribution. AI creates the title after the first pass.",
+              )}{" "}
             </p>
           </section>
           <section className="panel">
             <h2 className="field-heading">
-              <span className="step-number">2</span>Bring your people
+              <span className="step-number">2</span>
+              {t("Bring your people")}{" "}
             </h2>
             <div className="segmented">
               {[
-                ["friends", "Friends"],
-                ["saved_group", "Saved group"],
-                ["random", "Surprise me"],
+                ["friends", t("Friends")],
+                ["saved_group", t("Saved group")],
+                ["random", t("Surprise me")],
               ].map(([id, label]) => (
                 <button
                   type="button"
@@ -962,22 +1031,23 @@ function Create({
                   key={id}
                   onClick={() => chooseMode(id)}
                 >
-                  {label}
+                  {t(label)}
                 </button>
               ))}
             </div>
             {mode === "saved_group" && (
               <label className="field">
-                Your group
+                {t("Your group")}{" "}
                 <select
                   required
                   value={group}
                   onChange={(e) => chooseGroup(e.target.value)}
                 >
-                  <option value="">Choose a group</option>
+                  <option value="">{t("Choose a group")}</option>
                   {groups.map((g) => (
                     <option key={g.id} value={g.id}>
-                      {g.name} · {g.members.length} people
+                      {g.name} ·{" "}
+                      {t("{count} people", { count: g.members.length })}
                     </option>
                   ))}
                 </select>
@@ -987,8 +1057,10 @@ function Create({
               <div className="info-box">
                 <Shuffle size={24} />
                 <p>
-                  We’ll randomly choose up to {maximum - 1} other players who
-                  have opted in. Your story stays within the group.
+                  {t(
+                    "We’ll randomly choose up to {count} other players who have opted in. Your story stays within the group.",
+                    { count: maximum - 1 },
+                  )}
                 </p>
               </div>
             ) : (
@@ -1018,13 +1090,15 @@ function Create({
                 {!available.length && (
                   <p className="help">
                     {mode === "friends"
-                      ? "Add friends in My people, or try a random group."
-                      : "Choose or create a saved group in My people."}
+                      ? t("Add friends in My people, or try a random group.")
+                      : t("Choose or create a saved group in My people.")}
                   </p>
                 )}
                 <p className="help">
-                  {members.length + 1} players, including you · Everyone joins
-                  immediately, with no invitations.
+                  {t(
+                    "{count} players, including you · Everyone joins immediately, with no invitations.",
+                    { count: members.length + 1 },
+                  )}
                 </p>
               </>
             )}
@@ -1033,10 +1107,11 @@ function Create({
         <aside>
           <section className="panel">
             <h2 className="field-heading">
-              <span className="step-number">3</span>The ground rules
+              <span className="step-number">3</span>
+              {t("The ground rules")}{" "}
             </h2>
             <label className="field">
-              Minutes per turn
+              {t("Minutes per turn")}{" "}
               <input
                 type="number"
                 min="0.0167"
@@ -1049,7 +1124,7 @@ function Create({
             </label>
             <div className="field-row">
               <label className="field">
-                Min. players
+                {t("Min. players")}{" "}
                 <input
                   type="number"
                   min={2}
@@ -1060,7 +1135,7 @@ function Create({
                 />
               </label>
               <label className="field">
-                Max. players
+                {t("Max. players")}{" "}
                 <input
                   type="number"
                   min={minimum}
@@ -1072,11 +1147,12 @@ function Create({
               </label>
             </div>
             <label className="field">
-              House rules <span className="optional">optional</span>
+              {t("House rules")}{" "}
+              <span className="optional">{t("optional")}</span>
               <textarea
                 rows={3}
                 maxLength={500}
-                placeholder="Keep it PG. Bonus points for callbacks."
+                placeholder={t("Keep it PG. Bonus points for callbacks.")}
                 value={rules}
                 onChange={(e) => setRules(e.target.value)}
               />
@@ -1084,8 +1160,9 @@ function Create({
             <div className="rules-note">
               <LockKeyhole size={17} />
               <p>
-                Your story is for the group. It only becomes public if everyone
-                agrees after the finale.
+                {t(
+                  "Your story is for the group. It only becomes public if everyone agrees after the finale.",
+                )}{" "}
               </p>
             </div>
             <button
@@ -1095,12 +1172,12 @@ function Create({
                 busy || !setup.trim() || (mode === "saved_group" && !group)
               }
             >
-              {busy ? "Launching…" : "Launch & pass"}
+              {busy ? t("Launching…") : t("Launch & pass")}
               <ArrowRight size={17} />
             </button>
             <p className="help centered">
-              One contribution each. Random passes.
-              <br />A prepared AI fallback if someone times out.
+              {t("One contribution each. Random passes.")} <br />
+              {t("A prepared AI fallback if someone times out.")}{" "}
             </p>
           </section>
         </aside>
@@ -1144,7 +1221,7 @@ function Story({
           }
         })
         .catch((e) => {
-          if (alive) setError(e.message);
+          if (alive) setError(errorMessage(e));
         });
     void load();
     const timer = setInterval(load, 3000);
@@ -1161,18 +1238,18 @@ function Story({
     return (
       <Empty
         icon={<LockKeyhole size={26} />}
-        title="This story is staying with its people."
+        title={t("This story is staying with its people.")}
       >
-        <p>{error}</p>
+        <p>{translateError(error)}</p>
         <button
           className="button secondary"
           onClick={() => navigate("discover")}
         >
-          Back to Discover
+          {t("Back to Discover")}{" "}
         </button>
       </Empty>
     );
-  if (!chain) return <div className="loading">Unfolding the story…</div>;
+  if (!chain) return <div className="loading">{t("Unfolding the story…")}</div>;
   const active = chain.turns.find((t) => t.status !== "submitted");
   const seconds = active
     ? Math.max(
@@ -1198,7 +1275,7 @@ function Story({
         onClick={() => navigate(chain.is_participant ? "chains" : "discover")}
       >
         <ArrowLeft size={16} />
-        {chain.is_participant ? "My chains" : "Discover"}
+        {chain.is_participant ? t("My chains") : t("Discover")}
       </button>
       <div className="story-heading">
         <span className="eyebrow">
@@ -1206,26 +1283,26 @@ function Story({
             ? "A STORY FROM THE COLLECTIVE IMAGINATION"
             : "JUST BETWEEN YOUR PEOPLE"}
         </span>
-        <h1>{chain.title}</h1>
+        <h1>{chain.title_pending ? t("Untitled Chain") : chain.title}</h1>
         <div className="story-meta">
           <span>
             <Users size={16} />
-            {chain.participant_count} players
+            {t("{count} players", { count: chain.participant_count })}
           </span>
           <span>
             <Shuffle size={16} />
-            {chain.pass_count} passes
+            {t("{count} passes", { count: chain.pass_count })}
           </span>
           <span>
             <LockKeyhole size={16} />
             {chain.visibility === "published"
-              ? "Published"
-              : "Participants only"}
+              ? t("Published")
+              : t("Participants only")}
           </span>
           <button
             className={`like-button ${chain.liked ? "liked" : ""}`}
             onClick={() => void like("chains", id, chain.liked)}
-            aria-label={chain.liked ? "Unlike chain" : "Like chain"}
+            aria-label={chain.liked ? t("Unlike chain") : t("Like chain")}
           >
             <Heart size={17} fill={chain.liked ? "currentColor" : "none"} />
             {chain.likes}
@@ -1237,7 +1314,7 @@ function Story({
           <article className="story-entry setup-entry">
             <div className="entry-heading">
               <span className="story-step">01</span>
-              <span className="eyebrow">THE SETUP</span>
+              <span className="eyebrow">{t("THE SETUP")}</span>
               {chain.creator && (
                 <span className="entry-author">
                   <Avatar person={chain.creator} small />
@@ -1256,7 +1333,7 @@ function Story({
                     {String(turn.position + 1).padStart(2, "0")}
                   </span>
                   <span className={`motive motive-${turn.motive.id}`}>
-                    {turn.motive.emoji} {turn.motive.label}
+                    {turn.motive.emoji} {t(turn.motive.label)}
                   </span>
                   <span className="entry-author">
                     <Avatar person={turn.user} small />
@@ -1267,15 +1344,20 @@ function Story({
                 <div className="entry-footer">
                   <span>
                     {turn.ai_generated
-                      ? "AI-generated · participant timed out"
+                      ? t("AI-generated · participant timed out")
                       : turn.ai_assisted
-                        ? "Written with an AI suggestion"
-                        : "A human plot development"}
+                        ? t("Written with an AI suggestion")
+                        : t("A human plot development")}
                   </span>
                   <button
                     className={`like-button ${turn.liked ? "liked" : ""}`}
                     onClick={() => void like("turns", turn.id, turn.liked)}
-                    aria-label={`${turn.liked ? "Unlike" : "Like"} turn ${turn.position}`}
+                    aria-label={t(
+                      turn.liked
+                        ? "Unlike turn {number}"
+                        : "Like turn {number}",
+                      { number: turn.position },
+                    )}
                   >
                     <Heart
                       size={16}
@@ -1303,19 +1385,26 @@ function Story({
                   </div>
                   <h3>
                     {seconds === 0
-                      ? "The deadline has passed."
-                      : `${active.user.name} has the next chapter.`}
+                      ? t("The deadline has passed.")
+                      : t("{name} has the next chapter.", {
+                          name: active.user.name,
+                        })}
                   </h3>
                   <p>
                     {seconds === 0
-                      ? "The prepared AI suggestion will complete this turn. If preparation is delayed, the story waits for it."
-                      : `Their direction: ${active.motive.emoji} ${active.motive.label.toLowerCase()}.`}
+                      ? t(
+                          "The prepared AI suggestion will complete this turn. If preparation is delayed, the story waits for it.",
+                        )
+                      : t("Their direction: {motive}.", {
+                          motive: `${active.motive.emoji} ${t(active.motive.label)}`,
+                        })}
                   </p>
                   {seconds > 0 && (
                     <span className="timer">
                       <Clock size={14} />
                       {Math.floor(seconds / 60)}:
-                      {String(seconds % 60).padStart(2, "0")} remaining
+                      {String(seconds % 60).padStart(2, "0")}{" "}
+                      {t("remaining")}{" "}
                     </span>
                   )}
                 </div>
@@ -1323,69 +1412,76 @@ function Story({
             ) : (
               <div className="waiting-card">
                 <Sparkles />
-                <h3>The next pass is being prepared.</h3>
+                <h3>{t("The next pass is being prepared.")}</h3>
                 <p>
-                  The system is assigning a Motive and randomly choosing the
-                  next player.
+                  {t(
+                    "The system is assigning a Motive and randomly choosing the next player.",
+                  )}{" "}
                 </p>
               </div>
             )
           ) : (
             <div className="finale">
               <span>✳</span>
-              <h2>And that’s a wrap.</h2>
+              <h2>{t("And that’s a wrap.")}</h2>
               <p>
-                {chain.participant_count} minds. One story that nobody could
-                have written alone.
+                {t(
+                  "{count} minds. One story that nobody could have written alone.",
+                  { count: chain.participant_count },
+                )}
               </p>
             </div>
           )}
         </div>
         <aside className="story-aside">
           <section className="panel">
-            <span className="eyebrow">THE CAST</span>
-            <h3>Good company.</h3>
+            <span className="eyebrow">{t("THE CAST")}</span>
+            <h3>{t("Good company.")}</h3>
             <div className="cast-list">
               {chain.participants.map((p) => (
                 <div key={p.id}>
                   <Avatar person={p} small />
                   <span>
                     {p.name}
-                    {p.id === me?.id && <small> (you)</small>}
+                    {p.id === me?.id && <small> {t("(you)")}</small>}
                   </span>
                   {p.contributed ? (
                     <Check size={16} />
                   ) : active?.user.id === p.id ? (
                     <span className="dot active-dot" />
                   ) : (
-                    <span className="cast-wait">soon</span>
+                    <span className="cast-wait">{t("soon")}</span>
                   )}
                 </div>
               ))}
             </div>
             {chain.rules && (
               <div className="house-rules">
-                <span className="eyebrow">HOUSE RULES</span>
+                <span className="eyebrow">{t("HOUSE RULES")}</span>
                 <p>{chain.rules}</p>
               </div>
             )}
           </section>
           {chain.status === "completed" && (
             <section className="panel publication-panel">
-              <span className="eyebrow">THE NEXT CHAPTER</span>
+              <span className="eyebrow">{t("THE NEXT CHAPTER")}</span>
               <h3>
                 {chain.visibility === "published"
-                  ? "Out in the world."
+                  ? t("Out in the world.")
                   : chain.publication_status === "rejected"
-                    ? "A story just for you."
-                    : "Worth sharing?"}
+                    ? t("A story just for you.")
+                    : t("Worth sharing?")}
               </h3>
               <p>
                 {chain.visibility === "published"
-                  ? "Every player approved. Your story is now in Discover."
+                  ? t("Every player approved. Your story is now in Discover.")
                   : chain.publication_status === "rejected"
-                    ? "A participant declined publication. This story stays with the group."
-                    : "Publishing puts the full story in Discover. Every player must explicitly approve."}
+                    ? t(
+                        "A participant declined publication. This story stays with the group.",
+                      )
+                    : t(
+                        "Publishing puts the full story in Discover. Every player must explicitly approve.",
+                      )}
               </p>
               {chain.is_participant &&
                 chain.publication_status === "not_requested" && (
@@ -1401,14 +1497,16 @@ function Story({
                       )
                     }
                   >
-                    Request publication
-                    <ArrowUpRight size={16} />
+                    {t("Request publication")} <ArrowUpRight size={16} />
                   </button>
                 )}
               {chain.publication_status === "awaiting_approvals" && (
                 <>
                   <div className="approval-count">
-                    {approved} of {chain.participant_count} approved
+                    {t("{approved} of {count} approved", {
+                      approved,
+                      count: chain.participant_count,
+                    })}
                   </div>
                   {approval?.decision === "pending" ? (
                     <div className="approval-buttons">
@@ -1424,7 +1522,7 @@ function Story({
                           )
                         }
                       >
-                        Approve
+                        {t("Approve")}{" "}
                       </button>
                       <button
                         className="button secondary"
@@ -1438,12 +1536,14 @@ function Story({
                           )
                         }
                       >
-                        Decline
+                        {t("Decline")}{" "}
                       </button>
                     </div>
                   ) : (
                     <p className="help">
-                      Your approval is recorded. Waiting for the others.
+                      {t(
+                        "Your approval is recorded. Waiting for the others.",
+                      )}{" "}
                     </p>
                   )}
                 </>
@@ -1458,7 +1558,7 @@ function Story({
                     )
                   }
                 >
-                  Copy story link <ArrowUpRight size={16} />
+                  {t("Copy story link")} <ArrowUpRight size={16} />
                 </button>
               )}
             </section>
@@ -1466,11 +1566,9 @@ function Story({
           <div className="sidebar-note">
             <Sparkles size={18} />
             <p>
-              One contribution each.
-              <br />
-              The system chooses the next player.
-              <br />
-              Every completed line stays.
+              {t("One contribution each.")} <br />
+              {t("The system chooses the next player.")} <br />
+              {t("Every completed line stays.")}{" "}
             </p>
           </div>
         </aside>
@@ -1509,38 +1607,39 @@ function Composer({
   return (
     <form className="composer" onSubmit={submit}>
       <div className="section-heading">
-        <span className="eyebrow">THE STORY IS IN YOUR HANDS</span>
+        <span className="eyebrow">{t("THE STORY IS IN YOUR HANDS")}</span>
         <span className={`timer ${seconds < 60 ? "urgent" : ""}`}>
           <Clock size={14} />
           {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
         </span>
       </div>
       <h2>
-        Your turn. <em>{turn.motive.label}.</em>
+        {t("Your turn.")} <em>{t(turn.motive.label)}.</em>
       </h2>
       <label className="sr-only" htmlFor="contribution">
-        Your contribution
+        {t("Your contribution")}{" "}
       </label>
       <textarea
         id="contribution"
         rows={5}
         required
         maxLength={1500}
-        placeholder="And then…"
+        placeholder={t("And then…")}
         value={text}
         onChange={(e) => setText(e.target.value)}
       />
       <div className="textarea-footer">
         <span>
           {assisted
-            ? "Using an AI suggestion · edit it however you like"
-            : "Your words. Your unexpected twist."}
+            ? t("Using an AI suggestion · edit it however you like")
+            : t("Your words. Your unexpected twist.")}
         </span>
         <span>{text.length}/1500</span>
       </div>
       <div className="suggestions">
         <span className="eyebrow">
-          <Sparkles size={14} />A LITTLE INSPIRATION
+          <Sparkles size={14} />
+          {t("A LITTLE INSPIRATION")}{" "}
         </span>
         {turn.suggestions ? (
           turn.suggestions.map((suggestion, i) => (
@@ -1558,21 +1657,24 @@ function Composer({
           ))
         ) : (
           <p className="help">
-            Suggestions are being prepared. You can write independently.
+            {t(
+              "Suggestions are being prepared. You can write independently.",
+            )}{" "}
           </p>
         )}
       </div>
       <div className="composer-bottom">
         <p>
-          If your timer runs out, a prepared AI suggestion will be submitted and
-          labeled automatically.
+          {t(
+            "If your timer runs out, a prepared AI suggestion will be submitted and labeled automatically.",
+          )}{" "}
         </p>
         <button
           className="button primary"
           disabled={busy || !text.trim()}
           type="submit"
         >
-          {busy ? "Passing…" : "Submit & Pass"}
+          {busy ? t("Passing…") : t("Submit & Pass")}
           <ArrowRight size={17} />
         </button>
       </div>
@@ -1620,7 +1722,7 @@ function People({
         }
       })
       .catch((e) => {
-        if (alive) setLoadError(e.message);
+        if (alive) setLoadError(errorMessage(e));
       });
     return () => {
       alive = false;
@@ -1637,19 +1739,20 @@ function People({
   }
   return (
     <section className="page">
-      <span className="eyebrow">THE BEST STORIES HAVE A GOOD CAST</span>
+      <span className="eyebrow">{t("THE BEST STORIES HAVE A GOOD CAST")}</span>
       <h1>
-        Your people. <em>Your possibilities.</em>
+        {t("Your people.")} <em>{t("Your possibilities.")}</em>
       </h1>
       <p className="page-intro">
-        Keep your favorite collaborators close. Saved groups make the next Chain
-        easy.
+        {t(
+          "Keep your favorite collaborators close. Saved groups make the next Chain easy.",
+        )}{" "}
       </p>
       <div className="section-heading">
-        <h2>Saved groups</h2>
+        <h2>{t("Saved groups")}</h2>
         <button className="button secondary" onClick={() => edit("new")}>
           <Plus size={17} />
-          New group
+          {t("New group")}{" "}
         </button>
       </div>
       <div className="group-grid">
@@ -1670,12 +1773,11 @@ function People({
                 className="text-button"
                 onClick={() => navigate(`create/${g.id}`)}
               >
-                Start a chain
-                <ArrowUpRight size={16} />
+                {t("Start a chain")} <ArrowUpRight size={16} />
               </button>
               {g.owner_id === me.id ? (
                 <button className="text-button muted" onClick={() => edit(g)}>
-                  Edit
+                  {t("Edit")}{" "}
                 </button>
               ) : (
                 <button
@@ -1687,7 +1789,7 @@ function People({
                     )
                   }
                 >
-                  Leave
+                  {t("Leave")}{" "}
                 </button>
               )}
             </div>
@@ -1696,18 +1798,20 @@ function People({
       </div>
       {!groups.length && (
         <p className="help">
-          No saved groups yet. Choose friends and give your group a name.
+          {t(
+            "No saved groups yet. Choose friends and give your group a name.",
+          )}{" "}
         </p>
       )}
       {loadError && (
         <div className="alert" role="alert">
-          {loadError}
+          {translateError(loadError)}
         </div>
       )}
       <section className="panel friends-panel">
         <div className="section-heading">
           <h2>
-            Friends <span className="count">{friends.length}</span>
+            {t("Friends")} <span className="count">{friends.length}</span>
           </h2>
         </div>
         <div className="friend-grid">
@@ -1724,7 +1828,7 @@ function People({
                   )
                 }
               >
-                Remove
+                {t("Remove")}{" "}
               </button>
             </div>
           ))}
@@ -1741,25 +1845,25 @@ function People({
           }}
         >
           <label className="sr-only" htmlFor="friend-search">
-            Search people by name
+            {t("Search people by name")}{" "}
           </label>
           <input
             id="friend-search"
-            placeholder="Find a friend by name…"
+            placeholder={t("Find a friend by name…")}
             minLength={2}
             maxLength={80}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             required
           />
-          <button className="button secondary">Find people</button>
+          <button className="button secondary">{t("Find people")}</button>
         </form>
         {results.map((p) => (
           <div className="search-result" key={p.id}>
             <Avatar person={p} small />
             <span>{p.name}</span>
             {friends.some((f) => f.id === p.id) ? (
-              <span className="help">Already friends</span>
+              <span className="help">{t("Already friends")}</span>
             ) : (
               <button
                 className="text-button"
@@ -1770,14 +1874,14 @@ function People({
                   )
                 }
               >
-                Add friend <Plus size={14} />
+                {t("Add friend")} <Plus size={14} />
               </button>
             )}
           </div>
         ))}
         {requests.length > 0 && (
           <div className="friend-requests">
-            <h3>Friend requests</h3>
+            <h3>{t("Friend requests")}</h3>
             {requests.map((p) => (
               <div className="search-result" key={p.id}>
                 <Avatar person={p} small />
@@ -1796,7 +1900,7 @@ function People({
                         )
                       }
                     >
-                      Accept
+                      {t("Accept")}{" "}
                     </button>
                     <button
                       className="text-button muted"
@@ -1808,11 +1912,11 @@ function People({
                         )
                       }
                     >
-                      Decline
+                      {t("Decline")}{" "}
                     </button>
                   </>
                 ) : (
-                  <span className="help">Request sent</span>
+                  <span className="help">{t("Request sent")}</span>
                 )}
               </div>
             ))}
@@ -1847,18 +1951,18 @@ function People({
             <button
               type="button"
               className="modal-close icon-button"
-              aria-label="Close group editor"
+              aria-label={t("Close group editor")}
               onClick={() => setEditing(null)}
             >
               <X />
             </button>
             <h2 id="group-title">
               {editing === "new"
-                ? "Bring the cast together."
-                : "A little cast adjustment."}
+                ? t("Bring the cast together.")
+                : t("A little cast adjustment.")}
             </h2>
             <label className="field">
-              Group name
+              {t("Group name")}{" "}
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -1886,10 +1990,12 @@ function People({
               ))}
             </div>
             <p className="help">
-              You’re included as the owner. Changes apply to future Chains.
+              {t(
+                "You’re included as the owner. Changes apply to future Chains.",
+              )}{" "}
             </p>
             <button className="button primary full" disabled={busy}>
-              Save group <Check size={17} />
+              {t("Save group")} <Check size={17} />
             </button>
           </form>
         </div>
@@ -1914,11 +2020,17 @@ function Preferences({
   demo: boolean;
 }) {
   const [preferences, setPreferences] = useState(me.settings);
+  useEffect(() => {
+    setPreferences((previous) => ({
+      ...previous,
+      language: me.settings.language,
+    }));
+  }, [me.settings.language]);
   const [busy, setBusy] = useState(false);
   return (
     <section className="page narrow settings-page">
-      <span className="eyebrow">MAKE YOURSELF AT HOME</span>
-      <h1>Your settings.</h1>
+      <span className="eyebrow">{t("MAKE YOURSELF AT HOME")}</span>
+      <h1>{t("Your settings.")}</h1>
       <form
         className="panel"
         onSubmit={async (e) => {
@@ -1926,7 +2038,9 @@ function Preferences({
           setBusy(true);
           await action(async () => {
             await api("/me/settings", "PUT", preferences);
-            setMe(await api<Me>("/me"));
+            const user = await api<Me>("/me");
+            setMe(user);
+            setLanguage(user.settings.language);
           }, "Preferences saved.");
           setBusy(false);
         }}
@@ -1937,10 +2051,11 @@ function Preferences({
         </div>
         <label className="toggle-field">
           <div>
-            <h3>Allow random group participation</h3>
+            <h3>{t("Allow random group participation")}</h3>
             <p>
-              Other players can automatically include you in randomly formed
-              Chains. No invitation or acceptance step.
+              {t(
+                "Other players can automatically include you in randomly formed Chains. No invitation or acceptance step.",
+              )}{" "}
             </p>
           </div>
           <input
@@ -1956,10 +2071,11 @@ function Preferences({
         </label>
         <label className="toggle-field">
           <div>
-            <h3>In-app notifications</h3>
+            <h3>{t("In-app notifications")}</h3>
             <p>
-              Hear about new Chains, your turn, finales, and publication
-              requests.
+              {t(
+                "Hear about new Chains, your turn, finales, and publication requests.",
+              )}{" "}
             </p>
           </div>
           <input
@@ -1974,26 +2090,32 @@ function Preferences({
           />
         </label>
         <label className="field">
-          Language
+          {t("Language")}{" "}
           <select
             value={preferences.language}
             onChange={(e) =>
-              setPreferences({ ...preferences, language: e.target.value })
+              setPreferences({
+                ...preferences,
+                language: supportedLanguage(e.target.value) ?? "en",
+              })
             }
           >
-            <option value="en">English</option>
+            {languages.map((item) => (
+              <option key={item.code} value={item.code} lang={item.code}>
+                {item.name}
+              </option>
+            ))}
           </select>
         </label>
         <button className="button primary" disabled={busy}>
-          Save preferences
-          <Check size={16} />
+          {t("Save preferences")} <Check size={16} />
         </button>
       </form>
       <div className="settings-actions">
         {demo && (
           <button className="button secondary" onClick={switchPlayer}>
             <Users size={17} />
-            Switch demo player
+            {t("Switch demo player")}{" "}
           </button>
         )}
         {me.admin && (
@@ -2002,7 +2124,7 @@ function Preferences({
             onClick={() => navigate("admin")}
           >
             <Settings size={17} />
-            Admin configuration
+            {t("Admin configuration")}{" "}
           </button>
         )}
         <button
@@ -2016,8 +2138,7 @@ function Preferences({
             }, "Signed out.")
           }
         >
-          Sign out
-          <ArrowRight size={16} />
+          {t("Sign out")} <ArrowRight size={16} />
         </button>
       </div>
     </section>
