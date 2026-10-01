@@ -4,7 +4,7 @@ from datetime import timedelta
 from passit.models import Chain, Turn, WorkItem, now
 from sqlalchemy import select
 
-from .conftest import launch
+from .conftest import drain, launch
 
 
 def test_multiple_workers_and_reconcilers_advance_once_without_deadlock(game):
@@ -12,6 +12,9 @@ def test_multiple_workers_and_reconcilers_advance_once_without_deadlock(game):
     ids = [launch(client, users, member_ids=[users[1].id])["id"] for _ in range(6)]
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(lambda _: worker.run_once(), range(40)))
+    # Idle calls can finish before an in-flight handoff enqueues its suggestions.
+    # Settle that newly queued work before asserting the final state.
+    drain(worker)
     with db.transaction() as s:
         turns = list(s.scalars(select(Turn)))
         assert len(turns) == len(ids)
