@@ -12,7 +12,17 @@ def digest(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def authenticate(request: Request, optional=False):
+def check_access(user):
+    if user and user.blocked_at is not None:
+        raise HTTPException(403, "Your account has been blocked")
+    return user
+
+
+def is_admin(user, settings):
+    return user.admin if settings.mode == "demo" else user.subject in settings.admin_subjects
+
+
+def authenticate(request: Request, optional=False, allow_blocked=False):
     app = request.app
     settings, db = app.state.settings, app.state.db
     if settings.mode == "demo":
@@ -20,7 +30,11 @@ def authenticate(request: Request, optional=False):
         with db.sessions() as s:
             session = s.get(LoginSession, digest(cookie)) if cookie else None
             if session and utc(session.expires_at) > now():
-                return s.get(User, session.user_id)
+                user = s.get(User, session.user_id)
+                if not allow_blocked:
+                    check_access(user)
+                if user:
+                    return user
     else:
         header = request.headers.get("authorization", "")
         if header.startswith("Bearer "):
@@ -50,7 +64,9 @@ def authenticate(request: Request, optional=False):
                     s.add(user)
                     s.flush()
                     s.add(UserSettings(user_id=user.id))
-                user.admin = user.subject in settings.admin_subjects
+                if not allow_blocked:
+                    check_access(user)
+                user.admin = is_admin(user, settings)
                 return user
     if optional:
         return None
@@ -59,6 +75,11 @@ def authenticate(request: Request, optional=False):
 
 def require_user(request: Request):
     return authenticate(request)
+
+
+def require_account_identity(request: Request):
+    # Limited to the caller's account status and notices; never grants application access.
+    return authenticate(request, allow_blocked=True)
 
 
 def optional_user(request: Request):

@@ -15,6 +15,8 @@ export const identity = authority
     })
   : null;
 
+export const accountBlockedMessage = "Your account has been blocked";
+
 export async function api<T>(
   path: string,
   method = "GET",
@@ -40,6 +42,12 @@ export async function api<T>(
         : Array.isArray(data.detail)
           ? "Please check the form and try again."
           : "Something went wrong";
+    if (
+      response.status === 403 &&
+      message === accountBlockedMessage &&
+      path !== "/demo/login"
+    )
+      window.dispatchEvent(new Event("passit:account-blocked"));
     throw new Error(message);
   }
   return data;
@@ -111,4 +119,17 @@ export type Notice = {
   chain_id: string;
   message: string;
   read: boolean;
+};
+
+export type AccountNotice = {
+  id: string;
+  kind: string;
+  source: string;
+  categories: string[];
+  created_at: string;
+};
+export type AccountStatus = {
+  user_id: string;
+  blocked_at: string | null;
+  notices: AccountNotice[];
 };

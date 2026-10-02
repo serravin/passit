@@ -9,7 +9,18 @@ from .ai import CreativeAI
 from .config import Settings
 from .db import Database
 from .domain import assign, lock_chain, queue, story_context, timeout
-from .models import AIProfile, Chain, Turn, WorkItem, now, uid
+from .guardrail import Guardrail, content_hash
+from .models import (
+    AIAssignment,
+    AIProfile,
+    Chain,
+    GeneratedTextProof,
+    PlatformSettings,
+    Turn,
+    WorkItem,
+    now,
+    uid,
+)
 from .telemetry import measured_generate
 
 log = logging.getLogger("passit.worker")
@@ -19,6 +30,7 @@ class Worker:
     def __init__(self, db, settings, ai=None):
         self.db = db
         self.ai = ai or CreativeAI(settings)
+        self.guardrail = Guardrail(db, settings)
 
     def reconcile(self):
         # Hold at most one aggregate lock per transaction. Multiple reconcilers and
@@ -30,6 +42,18 @@ class Worker:
                 )
             )
             chains = list(s.scalars(select(Chain.id).where(Chain.status == "active").limit(100)))
+            unchecked = list(s.scalars(select(Chain.id).where(Chain.safety_status == "pending").limit(100)))
+            guardrail_profile = s.get(AIAssignment, "guardrail")
+            guardrail_id = guardrail_profile.profile_id if guardrail_profile else None
+        if guardrail_id:
+            for chain_id in unchecked:
+                with self.db.transaction() as s:
+                    key = f"guard_scan:{chain_id}:{guardrail_id}"
+                    item = s.scalar(select(WorkItem).where(WorkItem.key == key).with_for_update())
+                    if item and item.status == "done":
+                        item.status, item.attempts, item.available_at = "pending", 0, now()
+                    elif not item:
+                        queue(s, "guard_scan", chain_id, key)
         for turn_id in overdue:
             with self.db.transaction() as s:
                 timeout(s, turn_id)
@@ -82,6 +106,8 @@ class Worker:
             item = s.get(WorkItem, item_id)
             task, aggregate = item.task, item.aggregate_id
             profile = s.get(AIProfile, item.profile_id) if item.profile_id else None
+            assignment = s.get(AIAssignment, "guardrail")
+            guardrail_id = assignment.profile_id if assignment else None
             if task in {"handoff", "title"}:
                 chain = s.get(Chain, aggregate)
                 # The first handoff contains only the creator's setup. Later turns
@@ -107,10 +133,41 @@ class Worker:
                 if not skip
                 else None
             )
+        if task == "guard_scan":
+            self.guardrail.scan_chain(aggregate, profile_id=profile.id, work_item_id=item_id)
+        elif output and task == "suggestions":
+            safety_context = {
+                "setup": context["setup"],
+                "rules": context["rules"],
+                "previous_contributions": context["story"][-3:],
+            }
+            for candidate in output["suggestions"]:
+                self.guardrail.check_generated(
+                    candidate,
+                    context=safety_context,
+                    kind="suggestion",
+                    chain_id=chain_id,
+                    profile_id=guardrail_id,
+                    work_item_id=item_id,
+                )
+        elif output and task == "title":
+            self.guardrail.check_generated(
+                output["title"],
+                context={"setup": context["setup"]},
+                kind="title",
+                chain_id=chain_id,
+                profile_id=guardrail_id,
+                work_item_id=item_id,
+            )
         with self.db.transaction() as s:
+            s.get(PlatformSettings, 1, with_for_update=True)
             item = s.scalar(select(WorkItem).where(WorkItem.id == item_id).with_for_update())
             if item.status != "processing" or item.lease_token != token:
                 return
+            if output and task in {"suggestions", "title"}:
+                current = s.get(AIAssignment, "guardrail")
+                if not current or current.profile_id != guardrail_id:
+                    raise ValueError("Guardrail configuration changed; retry generation")
             if task == "handoff" and output:
                 chain = lock_chain(s, aggregate)
                 # Assignment and recipient are persisted atomically; duplicate deliveries are harmless.
@@ -122,6 +179,15 @@ class Worker:
                 if turn.status != "submitted" and turn.suggestions is None:
                     turn.suggestions = output["suggestions"]
                     turn.fallback_index = output["fallback_index"]
+                    for candidate in output["suggestions"]:
+                        s.add(
+                            GeneratedTextProof(
+                                user_id=turn.user_id,
+                                turn_id=turn.id,
+                                kind="suggestion",
+                                content_hash=content_hash(candidate),
+                            )
+                        )
                     s.flush()
                     timeout(s, turn.id)
             elif task == "title" and output:

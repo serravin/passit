@@ -9,19 +9,41 @@ import jwt
 from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.orm import aliased
 
 from .ai import CreativeAI
 from .analytics import report
-from .auth import digest, optional_user, require_admin, require_user
+from .auth import (
+    check_access,
+    digest,
+    is_admin,
+    optional_user,
+    require_account_identity,
+    require_admin,
+    require_user,
+)
 from .config import Settings
 from .db import Database
-from .domain import fail, friends, launch, publication, require_member, submit, validate_group
+from .domain import (
+    fail,
+    friends,
+    invalidate_prepared_text,
+    launch,
+    publication,
+    require_member,
+    submit,
+    utc,
+    validate_group,
+)
+from .guardrail import Guardrail, UnsafeAIOutput, ai_origin, content_hash, story_context
 from .models import (
+    AccountNotice,
     AIAssignment,
     AIProfile,
     Chain,
     Friendship,
+    GeneratedTextProof,
     Group,
     GroupMember,
     Like,
@@ -30,12 +52,15 @@ from .models import (
     Notification,
     Participant,
     PlatformSettings,
+    SafetyReview,
     Turn,
     User,
+    UserModerationEvent,
     UserSettings,
     WorkItem,
     now,
 )
+from .moderation import set_block
 from .schemas import (
     ActivateProfile,
     Decision,
@@ -46,8 +71,10 @@ from .schemas import (
     PlatformInput,
     Preferences,
     ProfileInput,
+    SafetyDecision,
     SetupRequest,
     Submission,
+    UserBlockInput,
 )
 from .seed import initialize
 from .telemetry import measured_generate
@@ -56,6 +83,7 @@ from .views import chain_view, date, user_view
 CurrentUser = Annotated[User, Depends(require_user)]
 OptionalUser = Annotated[User | None, Depends(optional_user)]
 Admin = Annotated[User, Depends(require_admin)]
+AccountIdentity = Annotated[User, Depends(require_account_identity)]
 
 
 def create_app(settings=None, db=None):
@@ -72,6 +100,7 @@ def create_app(settings=None, db=None):
 
     app = FastAPI(title="PassIt", version="0.1.0", lifespan=lifespan)
     app.state.settings, app.state.db = settings, db
+    app.state.guardrail = Guardrail(db, settings)
     if settings.mode == "production":
         app.state.jwks = jwt.PyJWKClient(settings.jwks_url)
     app.add_middleware(
@@ -131,6 +160,7 @@ def create_app(settings=None, db=None):
             user = s.get(User, data.user_id)
             if not user or user.issuer != "demo":
                 fail("Account not found", 404)
+            check_access(user)
             token = secrets.token_urlsafe(32)
             s.add(
                 LoginSession(token_hash=digest(token), user_id=user.id, expires_at=now() + timedelta(days=1))
@@ -170,6 +200,38 @@ def create_app(settings=None, db=None):
                 },
             }
 
+    @app.get("/api/account-status")
+    def account_status(user: AccountIdentity):
+        with db.sessions() as s:
+            return {
+                "user_id": user.id,
+                "blocked_at": date(user.blocked_at),
+                "notices": [
+                    {
+                        "id": n.id,
+                        "kind": n.kind,
+                        "source": n.source,
+                        "categories": n.categories,
+                        "created_at": date(n.created_at),
+                    }
+                    for n in s.scalars(
+                        select(AccountNotice)
+                        .where(AccountNotice.user_id == user.id, AccountNotice.read.is_(False))
+                        .order_by(AccountNotice.created_at.desc())
+                        .limit(20)
+                    )
+                ],
+            }
+
+    @app.post("/api/account-notices/{notice_id}/read")
+    def read_account_notice(notice_id: str, user: AccountIdentity):
+        with db.transaction() as s:
+            notice = s.get(AccountNotice, notice_id, with_for_update=True)
+            if not notice or notice.user_id != user.id:
+                fail("Notice not found", 404)
+            notice.read = True
+        return {"ok": True}
+
     @app.put("/api/me/settings")
     def preferences(data: Preferences, user: CurrentUser):
         with db.transaction() as s:
@@ -207,14 +269,17 @@ def create_app(settings=None, db=None):
             return [
                 user_view(u)
                 for u in s.scalars(
-                    select(User).where(User.name.ilike(f"%{q}%"), User.id != user.id).limit(20)
+                    select(User)
+                    .where(User.name.ilike(f"%{q}%"), User.id != user.id, User.blocked_at.is_(None))
+                    .limit(20)
                 )
             ]
 
     @app.post("/api/friends")
     def request_friend(data: FriendInput, user: CurrentUser):
         with db.transaction() as s:
-            if data.user_id == user.id or not s.get(User, data.user_id):
+            target = s.get(User, data.user_id)
+            if data.user_id == user.id or not target or target.blocked_at is not None:
                 fail("Choose another user", 422)
             left, right = sorted([user.id, data.user_id])
             if s.get(Friendship, (left, right)):
@@ -230,6 +295,8 @@ def create_app(settings=None, db=None):
             if not row or row.status != "pending" or row.requested_by == user.id:
                 fail("Incoming request not found", 404)
             if data.accept:
+                if s.get(User, other_id).blocked_at is not None:
+                    fail("Choose another user", 422)
                 row.status = "accepted"
             else:
                 s.delete(row)
@@ -312,6 +379,7 @@ def create_app(settings=None, db=None):
                     select(Chain)
                     .join(Participant)
                     .where(Participant.user_id == user.id)
+                    .where(Chain.safety_status != "flagged")
                     .order_by(Chain.created_at.desc())
                     .limit(100)
                 )
@@ -319,8 +387,25 @@ def create_app(settings=None, db=None):
 
     @app.post("/api/chains", status_code=201)
     def new_chain(data: Launch, user: CurrentUser):
+        with db.sessions() as s:
+            origin = "ai" if ai_origin(s, user.id, data.setup, "setup") else "human"
+        review = app.state.guardrail.check(data.setup, user_id=user.id, origin=origin)
+        app.state.guardrail.enforce(review)
+        if data.rules:
+            rule_review = app.state.guardrail.check(
+                data.rules, user_id=user.id, kind="rules", context={"setup": data.setup}
+            )
+            app.state.guardrail.enforce(rule_review)
         with db.transaction() as s:
+            s.get(PlatformSettings, 1, with_for_update=True)
+            assignment = s.get(AIAssignment, "guardrail")
+            if not assignment or assignment.profile_id != review.profile_id:
+                fail("Safety check unavailable. Please try again.", 503)
+            if data.rules and rule_review.profile_id != assignment.profile_id:
+                fail("Safety check unavailable. Please try again.", 503)
+            check_access(s.get(User, user.id))
             chain = launch(s, user, data)
+            chain.safety_origin = origin
             return chain_view(s, chain, user.id, detail=True)
 
     @app.get("/api/chains/{chain_id}")
@@ -331,13 +416,57 @@ def create_app(settings=None, db=None):
 
     @app.post("/api/chains/{chain_id}/turns/{turn_id}/submit")
     def submit_turn(chain_id: str, turn_id: str, data: Submission, user: CurrentUser):
+        with db.sessions() as s:
+            chain = require_member(s, chain_id, user.id)
+            turn = s.get(Turn, turn_id)
+            if not turn or turn.chain_id != chain_id:
+                fail("Turn not found", 404)
+            if turn.user_id != user.id:
+                fail("It’s another participant’s turn", 403)
+            if turn.status == "submitted":
+                fail("This turn is already complete")
+            if utc(turn.deadline_at) <= now():
+                fail("The deadline has passed; the prepared fallback will complete this turn")
+            context = story_context(s, chain)
+            origin = (
+                "ai"
+                if data.text in (turn.suggestions or [])
+                or ai_origin(s, user.id, data.text, "suggestion", turn_id)
+                else "human"
+            )
+        review = app.state.guardrail.check(
+            data.text,
+            context=context,
+            kind="contribution",
+            origin=origin,
+            user_id=user.id,
+            chain_id=chain_id,
+            turn_id=turn_id,
+        )
+        app.state.guardrail.enforce(review)
         with db.transaction() as s:
+            s.get(PlatformSettings, 1, with_for_update=True)
+            assignment = s.get(AIAssignment, "guardrail")
+            if not assignment or assignment.profile_id != review.profile_id:
+                fail("Safety check unavailable. Please try again.", 503)
+            check_access(s.get(User, user.id))
             submit(s, chain_id, turn_id, user.id, data.text, data.ai_assisted)
+            s.get(Turn, turn_id).safety_origin = origin
             return chain_view(s, s.get(Chain, chain_id), user.id, detail=True)
 
     @app.post("/api/chains/{chain_id}/publication")
     def publish(chain_id: str, data: Decision, user: CurrentUser):
+        with db.sessions() as s:
+            chain = require_member(s, chain_id, user.id)
+            if chain.status != "completed":
+                fail("Finish the story before requesting publication")
+        if data.decision != "rejected" and not app.state.guardrail.scan_chain(chain_id):
+            fail("The story was withheld by the safety check. An administrator can review it.", 422)
         with db.transaction() as s:
+            s.get(PlatformSettings, 1, with_for_update=True)
+            if data.decision != "rejected" and s.get(Chain, chain_id).safety_status != "approved":
+                fail("The story is waiting for its safety check. Please try again.", 503)
+            check_access(s.get(User, user.id))
             publication(s, chain_id, user.id, data.decision)
             return chain_view(s, s.get(Chain, chain_id), user.id, detail=True)
 
@@ -350,6 +479,7 @@ def create_app(settings=None, db=None):
                 Chain.status == "completed",
                 Chain.visibility == "published",
                 Chain.publication_status == "approved",
+                Chain.safety_status == "approved",
             )
             if category in {"awkward", "absurd", "twist"}:
                 query = query.where(Chain.id.in_(select(Turn.chain_id).where(Turn.motive_id == category)))
@@ -438,9 +568,25 @@ def create_app(settings=None, db=None):
                 fail("AI is not configured", 503)
             profile = s.get(AIProfile, assignment.profile_id)
             try:
-                return measured_generate(db, CreativeAI(settings), profile, "setup", {"theme": data.theme})
+                result = measured_generate(db, CreativeAI(settings), profile, "setup", {"theme": data.theme})
             except Exception:
                 fail("Setup assistance is unavailable; you can write your own setup", 503)
+        try:
+            review = app.state.guardrail.check_generated(
+                result["setup"], kind="generated_setup", user_id=user.id
+            )
+        except UnsafeAIOutput:
+            fail("The generated setup was withheld by the safety check. Please try again.", 503)
+        with db.transaction() as s:
+            s.get(PlatformSettings, 1, with_for_update=True)
+            assignment = s.get(AIAssignment, "guardrail")
+            if not assignment or assignment.profile_id != review.profile_id:
+                fail("Safety check unavailable. Please try again.", 503)
+            check_access(s.get(User, user.id))
+            s.add(
+                GeneratedTextProof(user_id=user.id, kind="setup", content_hash=content_hash(result["setup"]))
+            )
+        return result
 
     @app.get("/api/admin/statistics")
     def statistics(
@@ -483,6 +629,117 @@ def create_app(settings=None, db=None):
                 "assignments": {a.task: a.profile_id for a in s.scalars(select(AIAssignment))},
                 "failed_work": work,
             }
+
+    def admin_user_view(user):
+        return {
+            **user_view(user),
+            "admin": is_admin(user, settings),
+            "blocked_at": date(user.blocked_at),
+            "block_reason": user.block_reason,
+        }
+
+    @app.get("/api/admin/users")
+    def admin_users(
+        user: Admin,
+        q: str = Query(default="", max_length=80),
+        status: str = Query(default="all", pattern="^(all|active|blocked)$"),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=25, ge=1, le=100),
+    ):
+        query = select(User)
+        if q.strip():
+            query = query.where(or_(User.name.icontains(q.strip(), autoescape=True), User.id == q.strip()))
+        if status != "all":
+            query = query.where(
+                User.blocked_at.is_(None) if status == "active" else User.blocked_at.is_not(None)
+            )
+        with db.sessions() as s:
+            return {
+                "items": [
+                    admin_user_view(u)
+                    for u in s.scalars(query.order_by(User.name, User.id).offset(offset).limit(limit))
+                ],
+                "total": s.scalar(select(func.count()).select_from(query.subquery())),
+                "offset": offset,
+                "limit": limit,
+            }
+
+    @app.put("/api/admin/users/{user_id}/block")
+    def block_user(user_id: str, data: UserBlockInput, user: Admin):
+        with db.transaction() as s:
+            # Serialize with launches so a completed block cannot enter a new cast.
+            s.get(PlatformSettings, 1, with_for_update=True)
+            target = s.get(User, user_id, with_for_update=True)
+            if not target:
+                fail("Account not found", 404)
+            if data.blocked and (target.id == user.id or is_admin(target, settings)):
+                fail("Administrator accounts cannot be blocked", 422)
+            if (target.blocked_at is not None) != data.blocked:
+                set_block(s, target, data.blocked, admin_id=user.id, reason=data.reason or None)
+                s.flush()
+            return admin_user_view(target)
+
+    @app.get("/api/admin/moderation")
+    def moderation_history(user: Admin, limit: int = Query(default=20, ge=1, le=100)):
+        target, actor = aliased(User), aliased(User)
+        with db.sessions() as s:
+            return [
+                {
+                    "id": event.id,
+                    "user": user_view(account),
+                    "admin": user_view(administrator) if administrator else None,
+                    "source": event.source,
+                    "blocked": event.blocked,
+                    "reason": event.reason,
+                    "created_at": date(event.created_at),
+                }
+                for event, account, administrator in s.execute(
+                    select(UserModerationEvent, target, actor)
+                    .join(target, target.id == UserModerationEvent.user_id)
+                    .outerjoin(actor, actor.id == UserModerationEvent.admin_id)
+                    .order_by(UserModerationEvent.created_at.desc(), UserModerationEvent.id.desc())
+                    .limit(limit)
+                )
+            ]
+
+    @app.get("/api/admin/safety-reviews")
+    def safety_reviews(
+        user: Admin,
+        status: str = Query(default="pending", pattern="^(pending|allowed|confirmed)$"),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=25, ge=1, le=100),
+    ):
+        query = select(SafetyReview).where(
+            SafetyReview.allowed.is_(False), SafetyReview.review_status == status
+        )
+        with db.sessions() as s:
+            return {
+                "items": [
+                    {
+                        "id": r.id,
+                        "user": user_view(s.get(User, r.user_id)) if r.user_id else None,
+                        "chain_id": r.chain_id,
+                        "kind": r.kind,
+                        "origin": r.origin,
+                        "categories": r.categories,
+                        "text": r.text,
+                        "context": r.context,
+                        "created_at": date(r.created_at),
+                        "review_status": r.review_status,
+                        "profile_id": r.profile_id,
+                    }
+                    for r in s.scalars(
+                        query.order_by(SafetyReview.created_at.desc()).offset(offset).limit(limit)
+                    )
+                ],
+                "total": s.scalar(select(func.count()).select_from(query.subquery())),
+                "offset": offset,
+                "limit": limit,
+            }
+
+    @app.put("/api/admin/safety-reviews/{review_id}")
+    def decide_safety(review_id: str, data: SafetyDecision, user: Admin):
+        return app.state.guardrail.decide(review_id, data.decision, user.id)
 
     @app.put("/api/admin/platform")
     def update_platform(data: PlatformInput, user: Admin):
@@ -529,8 +786,31 @@ def create_app(settings=None, db=None):
             }
             try:
                 adapter = CreativeAI(settings)
-                for task in ("handoff", "suggestions", "title", "setup"):
-                    measured_generate(db, adapter, profile, task, context, purpose="validation")
+                for task in ("handoff", "suggestions", "title", "setup", "guardrail"):
+                    validation_context = (
+                        {
+                            "candidate": "A pigeon audited the coffee machine.",
+                            "story_context": {},
+                            "kind": "setup",
+                        }
+                        if task == "guardrail"
+                        else context
+                    )
+                    result = measured_generate(
+                        db, adapter, profile, task, validation_context, purpose="validation"
+                    )
+                    if task == "guardrail" and not result["allowed"]:
+                        raise ValueError("Guardrail rejected harmless validation text")
+                negative = {
+                    "candidate": "[[demo:bullying]]"
+                    if profile.provider == "demo"
+                    else "Everyone should harass Alex every day until Alex quits this group. Alex is worthless and deserves it.",
+                    "story_context": {},
+                    "kind": "contribution",
+                }
+                result = measured_generate(db, adapter, profile, "guardrail", negative, purpose="validation")
+                if result["allowed"]:
+                    raise ValueError("Guardrail missed validation abuse")
             except Exception as exc:
                 fail(
                     f"AI validation failed ({type(exc).__name__}); check connectivity and model parameters",
@@ -548,6 +828,11 @@ def create_app(settings=None, db=None):
             if not profile or not profile.validated_at:
                 fail("Validate the profile before activation", 422)
             assignment = s.get(AIAssignment, data.task)
+            if data.task == "guardrail" and (not assignment or assignment.profile_id != profile_id):
+                s.execute(
+                    update(Chain).where(Chain.safety_status == "approved").values(safety_status="pending")
+                )
+                invalidate_prepared_text(s)
             if assignment:
                 assignment.profile_id = profile_id
             else:

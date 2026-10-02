@@ -24,7 +24,16 @@ def capture_usage(usage):
 
 
 def measured_generate(
-    db, adapter, profile, task, context, *, chain_id=None, work_item_id=None, purpose="game"
+    db,
+    adapter,
+    profile,
+    task,
+    context,
+    *,
+    chain_id=None,
+    work_item_id=None,
+    purpose="game",
+    operation_key=None,
 ):
     started_at, clock = now(), time.monotonic()
     usage = {"input_tokens": None, "output_tokens": None}
@@ -55,7 +64,16 @@ def measured_generate(
             with db.transaction() as s:
                 is_retry = bool(
                     work_item_id
-                    and s.scalar(select(AICall.id).where(AICall.work_item_id == work_item_id).limit(1))
+                    and s.scalar(
+                        select(AICall.id)
+                        .where(
+                            AICall.work_item_id == work_item_id,
+                            AICall.task == task,
+                            AICall.purpose == purpose,
+                            AICall.operation_key == operation_key,
+                        )
+                        .limit(1)
+                    )
                 )
                 s.add(
                     AICall(
@@ -64,6 +82,7 @@ def measured_generate(
                         task=task,
                         chain_id=chain_id,
                         work_item_id=work_item_id,
+                        operation_key=operation_key,
                         purpose=purpose,
                         started_at=started_at,
                         duration_ms=elapsed,

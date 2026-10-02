@@ -102,6 +102,18 @@ export default function Admin({
           "Manage participant limits, versioned AI profiles, and failed background work.",
         )}{" "}
       </p>
+      <button
+        className="button secondary"
+        onClick={() => navigate("admin/users")}
+      >
+        {t("Manage users")}
+      </button>
+      <button
+        className="button secondary"
+        onClick={() => navigate("admin/safety")}
+      >
+        {t("Safety reviews")}
+      </button>
       {error && (
         <div className="alert" role="alert">
           {translateError(error)}
@@ -149,7 +161,7 @@ export default function Admin({
             <h2>{t("Profile revisions")}</h2>
             <p className="help">
               {t(
-                "Validate connectivity and all four output schemas before activation. Queued work retains its resolved revision.",
+                "Validate connectivity, all five output schemas, and the safety test before activation. Queued work retains its resolved revision.",
               )}{" "}
             </p>
             {state?.profiles.map((p) => (
@@ -213,6 +225,7 @@ export default function Admin({
                       "suggestions",
                       "title",
                       "setup",
+                      "guardrail",
                     ].map((task) => (
                       <option key={task} value={task}>
                         {t(task)}

@@ -2,7 +2,7 @@ import secrets
 from datetime import UTC, timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from .models import (
     AIAssignment,
@@ -16,6 +16,7 @@ from .models import (
     Participant,
     PlatformSettings,
     Turn,
+    User,
     UserSettings,
     WorkItem,
     now,
@@ -35,7 +36,14 @@ def require_member(s, chain_id, user_id, allow_published=False):
     chain = s.get(Chain, chain_id)
     if not chain:
         fail("Story not found", 404)
-    if allow_published and chain.visibility == "published" and chain.status == "completed":
+    if chain.safety_status == "flagged":
+        fail("Story is held for safety review", 404)
+    if (
+        allow_published
+        and chain.visibility == "published"
+        and chain.status == "completed"
+        and chain.safety_status == "approved"
+    ):
         return chain
     if not user_id or not s.get(Participant, (chain_id, user_id)):
         fail("Story not found", 404)
@@ -53,8 +61,12 @@ def queue(s, task, aggregate, key, payload=None, available_at=None):
     if s.scalar(select(WorkItem).where(WorkItem.key == key)):
         return
     profile_id = None
-    if task in {"handoff", "suggestions", "title", "setup"}:
-        assignment = s.get(AIAssignment, task) or s.get(AIAssignment, "default")
+    if task in {"handoff", "suggestions", "title", "setup", "guard_scan"}:
+        assignment = (
+            s.get(AIAssignment, "guardrail")
+            if task == "guard_scan"
+            else (s.get(AIAssignment, task) or s.get(AIAssignment, "default"))
+        )
         if not assignment:
             fail("An administrator must activate an AI profile before starting a Chain", 503)
         profile_id = assignment.profile_id
@@ -77,6 +89,23 @@ def notify(s, user_id, chain_id, message):
         s.add(Notification(user_id=user_id, chain_id=chain_id, message=message))
 
 
+def invalidate_prepared_text(s):
+    unfinished = select(Turn.id).where(Turn.status != "submitted")
+    s.execute(
+        update(WorkItem)
+        .where(WorkItem.task == "suggestions", WorkItem.aggregate_id.in_(unfinished))
+        .values(
+            status="pending",
+            attempts=0,
+            available_at=now(),
+            lease_token=None,
+            lease_until=None,
+            error_code=None,
+        )
+    )
+    s.execute(update(Turn).where(Turn.status != "submitted").values(suggestions=None, fallback_index=None))
+
+
 def friends(s, user_id):
     rows = s.scalars(
         select(Friendship).where(
@@ -84,7 +113,8 @@ def friends(s, user_id):
             Friendship.status == "accepted",
         )
     )
-    return {row.right_id if row.left_id == user_id else row.left_id for row in rows}
+    ids = {row.right_id if row.left_id == user_id else row.left_id for row in rows}
+    return set(s.scalars(select(User.id).where(User.id.in_(ids), User.blocked_at.is_(None))))
 
 
 def validate_group(s, owner_id, member_ids):
@@ -123,8 +153,12 @@ def launch(s, creator, data):
             fail("Random groups are chosen by the system", 422)
         eligible = list(
             s.scalars(
-                select(UserSettings.user_id).where(
-                    UserSettings.allow_random_participation.is_(True), UserSettings.user_id != creator.id
+                select(UserSettings.user_id)
+                .join(User)
+                .where(
+                    UserSettings.allow_random_participation.is_(True),
+                    UserSettings.user_id != creator.id,
+                    User.blocked_at.is_(None),
                 )
             )
         )
@@ -132,6 +166,8 @@ def launch(s, creator, data):
         members = set(eligible[: maximum - 1]) | {creator.id}
     if data.group_mode != "saved_group" and data.source_group_id:
         fail("Source group applies only to saved groups", 422)
+    if s.scalar(select(User.id).where(User.id.in_(members), User.blocked_at.is_not(None)).limit(1)):
+        fail("One or more selected players are unavailable", 422)
     if not data.min_participants <= len(members) <= maximum:
         fail(
             "Group size must fit the participant limits; larger saved groups require a subset or a higher maximum",
@@ -225,6 +261,8 @@ def complete_turn(s, chain, turn, text, assisted=False, generated=False, timesta
     turn.text = text
     turn.ai_assisted = assisted
     turn.ai_generated = generated
+    if generated:
+        turn.safety_origin = "ai"
     turn.submitted_at = timestamp
     turn.status = "submitted"
     turn.suggestions = None

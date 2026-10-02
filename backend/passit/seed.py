@@ -69,3 +69,7 @@ def initialize(db, demo=False):
             s.add(profile)
             s.flush()
             s.add(AIAssignment(task="default", profile_id=profile.id))
+            s.flush()
+        if demo and not s.get(AIAssignment, "guardrail"):
+            profile_id = s.get(AIAssignment, "default").profile_id
+            s.add(AIAssignment(task="guardrail", profile_id=profile_id))

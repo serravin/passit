@@ -30,8 +30,12 @@ import {
 } from "lucide-react";
 import { api, identity } from "./api";
 import type { Chain, Config, Group, Me, Notice, Person, Turn } from "./api";
+import type { AccountNotice, AccountStatus } from "./api";
 import Admin from "./Admin";
 import Dashboard from "./Dashboard";
+import UserManagement from "./UserManagement";
+import AccountNotices from "./AccountNotices";
+import SafetyReviews from "./SafetyReviews";
 
 type Navigate = (route: string) => void;
 type Action = (
@@ -92,6 +96,8 @@ export default function App() {
   const [route, setRoute] = useState(routeNow);
   const [config, setConfig] = useState<Config | null>(null);
   const [me, setMe] = useState<Me | null>(null);
+  const [blocked, setBlocked] = useState(false);
+  const [accountNotices, setAccountNotices] = useState<AccountNotice[]>([]);
   const [ready, setReady] = useState(false);
   const [accounts, setAccounts] = useState<Person[]>([]);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -118,6 +124,20 @@ export default function App() {
       return false;
     }
   };
+  useEffect(() => {
+    const denied = () => {
+      setBlocked(true);
+      setMe(null);
+      setNotices([]);
+      setNoticeOpen(false);
+      setLoginOpen(false);
+      void api<AccountStatus>("/account-status")
+        .then((status) => setAccountNotices(status.notices))
+        .catch(() => {});
+    };
+    window.addEventListener("passit:account-blocked", denied);
+    return () => window.removeEventListener("passit:account-blocked", denied);
+  }, []);
   useEffect(() => {
     const changed = () => {
       setRoute(routeNow());
@@ -153,6 +173,8 @@ export default function App() {
           if (alive) {
             setMe(user);
             setLanguage(user.settings.language);
+            const status = await api<AccountStatus>("/account-status");
+            if (alive) setAccountNotices(status.notices);
           }
         } catch {
           if (alive) setMe(null);
@@ -193,7 +215,10 @@ export default function App() {
         await api("/demo/login", "POST", { user_id: person.id });
         const user = await api<Me>("/me");
         setMe(user);
+        setBlocked(false);
         setLanguage(user.settings.language);
+        const status = await api<AccountStatus>("/account-status");
+        setAccountNotices(status.notices);
       })
     )
       setLoginOpen(false);
@@ -354,6 +379,17 @@ export default function App() {
         </div>
       )}
       <main>
+        <AccountNotices
+          notices={accountNotices}
+          dismiss={(id) =>
+            void action(async () => {
+              await api(`/account-notices/${id}/read`, "POST");
+              setAccountNotices((items) =>
+                items.filter((notice) => notice.id !== id),
+              );
+            })
+          }
+        />
         {error && (
           <div className="alert" role="alert">
             {translateError(error)}
@@ -370,6 +406,27 @@ export default function App() {
         ) : !config ? (
           <Empty icon={<Shuffle />} title={t("Unable to connect")}>
             <p>{t("Check that the API is running, then reload.")}</p>
+          </Empty>
+        ) : blocked ? (
+          <Empty icon={<LockKeyhole />} title={t("Account blocked")}>
+            <p>{t("Your account has been blocked")}</p>
+            <p>
+              {t("Contact an administrator if you believe this is a mistake.")}
+            </p>
+            <button
+              className="button secondary"
+              onClick={() =>
+                void action(async () => {
+                  await api("/logout", "POST");
+                  if (identity) await identity.removeUser();
+                  setBlocked(false);
+                  setAccountNotices([]);
+                  navigate("discover");
+                })
+              }
+            >
+              {t("Sign out")} <ArrowRight size={16} />
+            </button>
           </Empty>
         ) : route.startsWith("story/") ? (
           <Story
@@ -413,7 +470,10 @@ export default function App() {
         ) : route === "settings" ? (
           <Preferences
             me={me}
-            setMe={setMe}
+            setMe={(user) => {
+              setMe(user);
+              if (!user) setAccountNotices([]);
+            }}
             action={action}
             navigate={navigate}
             switchPlayer={() => setLoginOpen(true)}
@@ -422,6 +482,37 @@ export default function App() {
         ) : route === "dashboard" ? (
           me.admin ? (
             <Dashboard key={me.id} navigate={navigate} version={version} />
+          ) : (
+            <Empty
+              icon={<LockKeyhole />}
+              title={t("Administrator access required")}
+            >
+              <p>{t("This dashboard is available only to administrators.")}</p>
+            </Empty>
+          )
+        ) : route === "admin/safety" ? (
+          me.admin ? (
+            <SafetyReviews
+              action={action}
+              version={version}
+              navigate={navigate}
+            />
+          ) : (
+            <Empty
+              icon={<LockKeyhole />}
+              title={t("Administrator access required")}
+            >
+              <p>{t("This dashboard is available only to administrators.")}</p>
+            </Empty>
+          )
+        ) : route === "admin/users" ? (
+          me.admin ? (
+            <UserManagement
+              key={me.id}
+              action={action}
+              version={version}
+              navigate={navigate}
+            />
           ) : (
             <Empty
               icon={<LockKeyhole />}
@@ -465,6 +556,11 @@ export default function App() {
             </button>
             <span className="eyebrow">{t("THE DEMO CAST")}</span>
             <h2 id="login-title">{t("Who’s telling the story?")}</h2>
+            {error && (
+              <div className="alert" role="alert">
+                {translateError(error)}
+              </div>
+            )}
             <p>
               {t(
                 "Switch between players to try a complete round. Each fictional account has its own turn and publication decision.",

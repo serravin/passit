@@ -51,6 +51,11 @@ class PlatformInput(Input):
     max_participants_per_chain: int = Field(ge=2, le=100)
 
 
+class UserBlockInput(Input):
+    blocked: bool
+    reason: str | None = Field(default=None, max_length=500)
+
+
 class ProfileInput(Input):
     provider: Literal["demo", "azure_openai"] = "azure_openai"
     endpoint: str = Field(default="", max_length=500)
@@ -85,7 +90,11 @@ class ProfileInput(Input):
 
 
 class ActivateProfile(Input):
-    task: Literal["default", "handoff", "suggestions", "title", "setup"] = "default"
+    task: Literal["default", "handoff", "suggestions", "title", "setup", "guardrail"] = "default"
+
+
+class SafetyDecision(Input):
+    decision: Literal["allow", "confirm"]
 
 
 class SetupRequest(Input):

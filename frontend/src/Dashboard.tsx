@@ -256,6 +256,18 @@ export default function Dashboard({
         <div className="dashboard-actions">
           <button
             className="button secondary"
+            onClick={() => navigate("admin/users")}
+          >
+            {t("Manage users")}
+          </button>
+          <button
+            className="button secondary"
+            onClick={() => navigate("admin/safety")}
+          >
+            {t("Safety reviews")}
+          </button>
+          <button
+            className="button secondary"
             onClick={() => navigate("admin")}
           >
             <Settings size={17} />
@@ -726,6 +738,7 @@ export default function Dashboard({
               ["jobs_queued", "Recorded jobs queued"],
               ["failed_jobs", "Queued jobs currently failed"],
               ["validation_calls", "Profile validation calls"],
+              ["guardrail_calls", "Guardrail calls"],
             ])}
             <p className="help">
               {t(
