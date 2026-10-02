@@ -59,6 +59,37 @@ def test_production_oidc_validates_issuer_audience_signature_expiry_and_subject(
         ordinary = client.get("/api/me", headers=header({**claims, "sub": "ordinary"})).json()
         assert not ordinary["admin"]
         assert not ordinary["settings"]["allow_random_participation"]
+        ordinary_headers = header({**claims, "sub": "ordinary"})
+        assert client.get("/api/admin/users", headers=ordinary_headers).status_code == 403
+        assert (
+            client.put(
+                f"/api/admin/users/{ordinary['id']}/block", json={"blocked": True}, headers=header(claims)
+            ).status_code
+            == 200
+        )
+        # A valid JWT cannot bypass a local block; neither can a changed name.
+        assert client.get("/api/me", headers=ordinary_headers).status_code == 403
+        assert (
+            client.get(
+                "/api/discover", headers=header({**claims, "sub": "ordinary", "name": "Renamed"})
+            ).status_code
+            == 403
+        )
+        assert (
+            client.put(
+                f"/api/admin/users/{ordinary['id']}/block", json={"blocked": False}, headers=header(claims)
+            ).status_code
+            == 200
+        )
+        assert client.get("/api/me", headers=ordinary_headers).json()["id"] == ordinary["id"]
+        # The current allowlist protects admins even before their next sign-in updates the cached flag.
+        settings.admin_subjects.add("ordinary")
+        assert (
+            client.put(
+                f"/api/admin/users/{ordinary['id']}/block", json={"blocked": True}, headers=header(claims)
+            ).status_code
+            == 422
+        )
         assert client.post("/api/demo/login", json={"user_id": user_id}).status_code == 404
         assert client.get("/api/demo/accounts").status_code == 404
     with db.sessions() as s:

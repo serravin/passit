@@ -38,7 +38,19 @@ class User(Base):
     color: Mapped[str] = mapped_column(String(20), default="#fbbf24")
     admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    block_reason: Mapped[str | None] = mapped_column(String(500))
     __table_args__ = (UniqueConstraint("issuer", "subject"),)
+
+
+class UserModerationEvent(Base):
+    __tablename__ = "user_moderation_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    admin_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    blocked: Mapped[bool] = mapped_column(Boolean)
+    reason: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 
 
 class UserSettings(Base):

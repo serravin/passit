@@ -10,10 +10,11 @@ from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_, select
+from sqlalchemy.orm import aliased
 
 from .ai import CreativeAI
 from .analytics import report
-from .auth import digest, optional_user, require_admin, require_user
+from .auth import check_access, digest, is_admin, optional_user, require_admin, require_user
 from .config import Settings
 from .db import Database
 from .domain import fail, friends, launch, publication, require_member, submit, validate_group
@@ -32,6 +33,7 @@ from .models import (
     PlatformSettings,
     Turn,
     User,
+    UserModerationEvent,
     UserSettings,
     WorkItem,
     now,
@@ -48,6 +50,7 @@ from .schemas import (
     ProfileInput,
     SetupRequest,
     Submission,
+    UserBlockInput,
 )
 from .seed import initialize
 from .telemetry import measured_generate
@@ -131,6 +134,7 @@ def create_app(settings=None, db=None):
             user = s.get(User, data.user_id)
             if not user or user.issuer != "demo":
                 fail("Account not found", 404)
+            check_access(user)
             token = secrets.token_urlsafe(32)
             s.add(
                 LoginSession(token_hash=digest(token), user_id=user.id, expires_at=now() + timedelta(days=1))
@@ -207,14 +211,17 @@ def create_app(settings=None, db=None):
             return [
                 user_view(u)
                 for u in s.scalars(
-                    select(User).where(User.name.ilike(f"%{q}%"), User.id != user.id).limit(20)
+                    select(User)
+                    .where(User.name.ilike(f"%{q}%"), User.id != user.id, User.blocked_at.is_(None))
+                    .limit(20)
                 )
             ]
 
     @app.post("/api/friends")
     def request_friend(data: FriendInput, user: CurrentUser):
         with db.transaction() as s:
-            if data.user_id == user.id or not s.get(User, data.user_id):
+            target = s.get(User, data.user_id)
+            if data.user_id == user.id or not target or target.blocked_at is not None:
                 fail("Choose another user", 422)
             left, right = sorted([user.id, data.user_id])
             if s.get(Friendship, (left, right)):
@@ -230,6 +237,8 @@ def create_app(settings=None, db=None):
             if not row or row.status != "pending" or row.requested_by == user.id:
                 fail("Incoming request not found", 404)
             if data.accept:
+                if s.get(User, other_id).blocked_at is not None:
+                    fail("Choose another user", 422)
                 row.status = "accepted"
             else:
                 s.delete(row)
@@ -483,6 +492,89 @@ def create_app(settings=None, db=None):
                 "assignments": {a.task: a.profile_id for a in s.scalars(select(AIAssignment))},
                 "failed_work": work,
             }
+
+    def admin_user_view(user):
+        return {
+            **user_view(user),
+            "admin": is_admin(user, settings),
+            "blocked_at": date(user.blocked_at),
+            "block_reason": user.block_reason,
+        }
+
+    @app.get("/api/admin/users")
+    def admin_users(
+        user: Admin,
+        q: str = Query(default="", max_length=80),
+        status: str = Query(default="all", pattern="^(all|active|blocked)$"),
+        offset: int = Query(default=0, ge=0),
+        limit: int = Query(default=25, ge=1, le=100),
+    ):
+        query = select(User)
+        if q.strip():
+            query = query.where(or_(User.name.icontains(q.strip(), autoescape=True), User.id == q.strip()))
+        if status != "all":
+            query = query.where(
+                User.blocked_at.is_(None) if status == "active" else User.blocked_at.is_not(None)
+            )
+        with db.sessions() as s:
+            return {
+                "items": [
+                    admin_user_view(u)
+                    for u in s.scalars(query.order_by(User.name, User.id).offset(offset).limit(limit))
+                ],
+                "total": s.scalar(select(func.count()).select_from(query.subquery())),
+                "offset": offset,
+                "limit": limit,
+            }
+
+    @app.put("/api/admin/users/{user_id}/block")
+    def block_user(user_id: str, data: UserBlockInput, user: Admin):
+        with db.transaction() as s:
+            # Serialize with launches so a completed block cannot enter a new cast.
+            s.get(PlatformSettings, 1, with_for_update=True)
+            target = s.get(User, user_id, with_for_update=True)
+            if not target:
+                fail("Account not found", 404)
+            if data.blocked and (target.id == user.id or is_admin(target, settings)):
+                fail("Administrator accounts cannot be blocked", 422)
+            if (target.blocked_at is not None) != data.blocked:
+                timestamp = now()
+                reason = data.reason or None
+                target.blocked_at = timestamp if data.blocked else None
+                target.block_reason = reason if data.blocked else None
+                s.add(
+                    UserModerationEvent(
+                        user_id=target.id,
+                        admin_id=user.id,
+                        blocked=data.blocked,
+                        reason=reason,
+                        created_at=timestamp,
+                    )
+                )
+                s.flush()
+            return admin_user_view(target)
+
+    @app.get("/api/admin/moderation")
+    def moderation_history(user: Admin, limit: int = Query(default=20, ge=1, le=100)):
+        target, actor = aliased(User), aliased(User)
+        with db.sessions() as s:
+            return [
+                {
+                    "id": event.id,
+                    "user": user_view(account),
+                    "admin": user_view(administrator),
+                    "blocked": event.blocked,
+                    "reason": event.reason,
+                    "created_at": date(event.created_at),
+                }
+                for event, account, administrator in s.execute(
+                    select(UserModerationEvent, target, actor)
+                    .join(target, target.id == UserModerationEvent.user_id)
+                    .join(actor, actor.id == UserModerationEvent.admin_id)
+                    .order_by(UserModerationEvent.created_at.desc(), UserModerationEvent.id.desc())
+                    .limit(limit)
+                )
+            ]
 
     @app.put("/api/admin/platform")
     def update_platform(data: PlatformInput, user: Admin):

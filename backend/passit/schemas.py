@@ -51,6 +51,11 @@ class PlatformInput(Input):
     max_participants_per_chain: int = Field(ge=2, le=100)
 
 
+class UserBlockInput(Input):
+    blocked: bool
+    reason: str | None = Field(default=None, max_length=500)
+
+
 class ProfileInput(Input):
     provider: Literal["demo", "azure_openai"] = "azure_openai"
     endpoint: str = Field(default="", max_length=500)

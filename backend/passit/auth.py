@@ -12,6 +12,16 @@ def digest(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
+def check_access(user):
+    if user and user.blocked_at is not None:
+        raise HTTPException(403, "Your account has been blocked by an administrator")
+    return user
+
+
+def is_admin(user, settings):
+    return user.admin if settings.mode == "demo" else user.subject in settings.admin_subjects
+
+
 def authenticate(request: Request, optional=False):
     app = request.app
     settings, db = app.state.settings, app.state.db
@@ -20,7 +30,9 @@ def authenticate(request: Request, optional=False):
         with db.sessions() as s:
             session = s.get(LoginSession, digest(cookie)) if cookie else None
             if session and utc(session.expires_at) > now():
-                return s.get(User, session.user_id)
+                user = check_access(s.get(User, session.user_id))
+                if user:
+                    return user
     else:
         header = request.headers.get("authorization", "")
         if header.startswith("Bearer "):
@@ -50,7 +62,8 @@ def authenticate(request: Request, optional=False):
                     s.add(user)
                     s.flush()
                     s.add(UserSettings(user_id=user.id))
-                user.admin = user.subject in settings.admin_subjects
+                check_access(user)
+                user.admin = is_admin(user, settings)
                 return user
     if optional:
         return None
