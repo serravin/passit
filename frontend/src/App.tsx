@@ -106,24 +106,23 @@ export default function App() {
   const [toast, setToast] = useState("");
   const [error, setError] = useState("");
   const [version, setVersion] = useState(0);
-  const refresh = () => setVersion((v) => v + 1);
   const navigate: Navigate = useCallback((path) => {
     window.location.hash = path;
     setRoute(path);
     window.scrollTo(0, 0);
   }, []);
-  const action: Action = async (work, message) => {
+  const action: Action = useCallback(async (work, message) => {
     setError("");
     try {
       await work();
-      refresh();
+      setVersion((v) => v + 1);
       if (message) setToast(message);
       return true;
     } catch (e) {
       setError(errorMessage(e));
       return false;
     }
-  };
+  }, []);
   useEffect(() => {
     const denied = () => {
       setBlocked(true);
@@ -1013,7 +1012,7 @@ function Create({
         );
       }
     });
-  }, [me.id, initialGroup]);
+  }, [me.id, initialGroup, action]);
   function chooseMode(next: string) {
     setMode(next);
     setMembers([]);
