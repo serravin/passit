@@ -32,6 +32,7 @@ import { api, identity } from "./api";
 import type { Chain, Config, Group, Me, Notice, Person, Turn } from "./api";
 import Admin from "./Admin";
 import Dashboard from "./Dashboard";
+import UserManagement from "./UserManagement";
 
 type Navigate = (route: string) => void;
 type Action = (
@@ -92,6 +93,7 @@ export default function App() {
   const [route, setRoute] = useState(routeNow);
   const [config, setConfig] = useState<Config | null>(null);
   const [me, setMe] = useState<Me | null>(null);
+  const [blocked, setBlocked] = useState(false);
   const [ready, setReady] = useState(false);
   const [accounts, setAccounts] = useState<Person[]>([]);
   const [loginOpen, setLoginOpen] = useState(false);
@@ -118,6 +120,17 @@ export default function App() {
       return false;
     }
   };
+  useEffect(() => {
+    const denied = () => {
+      setBlocked(true);
+      setMe(null);
+      setNotices([]);
+      setNoticeOpen(false);
+      setLoginOpen(false);
+    };
+    window.addEventListener("passit:account-blocked", denied);
+    return () => window.removeEventListener("passit:account-blocked", denied);
+  }, []);
   useEffect(() => {
     const changed = () => {
       setRoute(routeNow());
@@ -193,6 +206,7 @@ export default function App() {
         await api("/demo/login", "POST", { user_id: person.id });
         const user = await api<Me>("/me");
         setMe(user);
+        setBlocked(false);
         setLanguage(user.settings.language);
       })
     )
@@ -371,6 +385,26 @@ export default function App() {
           <Empty icon={<Shuffle />} title={t("Unable to connect")}>
             <p>{t("Check that the API is running, then reload.")}</p>
           </Empty>
+        ) : blocked ? (
+          <Empty icon={<LockKeyhole />} title={t("Account blocked")}>
+            <p>{t("Your account has been blocked by an administrator")}</p>
+            <p>
+              {t("Contact an administrator if you believe this is a mistake.")}
+            </p>
+            <button
+              className="button secondary"
+              onClick={() =>
+                void action(async () => {
+                  await api("/logout", "POST");
+                  if (identity) await identity.removeUser();
+                  setBlocked(false);
+                  navigate("discover");
+                })
+              }
+            >
+              {t("Sign out")} <ArrowRight size={16} />
+            </button>
+          </Empty>
         ) : route.startsWith("story/") ? (
           <Story
             id={route.split("/")[1]}
@@ -430,6 +464,22 @@ export default function App() {
               <p>{t("This dashboard is available only to administrators.")}</p>
             </Empty>
           )
+        ) : route === "admin/users" ? (
+          me.admin ? (
+            <UserManagement
+              key={me.id}
+              action={action}
+              version={version}
+              navigate={navigate}
+            />
+          ) : (
+            <Empty
+              icon={<LockKeyhole />}
+              title={t("Administrator access required")}
+            >
+              <p>{t("This dashboard is available only to administrators.")}</p>
+            </Empty>
+          )
         ) : route === "admin" && me.admin ? (
           <Admin action={action} version={version} navigate={navigate} />
         ) : (
@@ -465,6 +515,11 @@ export default function App() {
             </button>
             <span className="eyebrow">{t("THE DEMO CAST")}</span>
             <h2 id="login-title">{t("Who’s telling the story?")}</h2>
+            {error && (
+              <div className="alert" role="alert">
+                {translateError(error)}
+              </div>
+            )}
             <p>
               {t(
                 "Switch between players to try a complete round. Each fictional account has its own turn and publication decision.",

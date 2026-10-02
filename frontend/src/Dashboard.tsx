@@ -256,6 +256,12 @@ export default function Dashboard({
         <div className="dashboard-actions">
           <button
             className="button secondary"
+            onClick={() => navigate("admin/users")}
+          >
+            {t("Manage users")}
+          </button>
+          <button
+            className="button secondary"
             onClick={() => navigate("admin")}
           >
             <Settings size={17} />

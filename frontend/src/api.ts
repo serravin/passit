@@ -15,6 +15,9 @@ export const identity = authority
     })
   : null;
 
+export const accountBlockedMessage =
+  "Your account has been blocked by an administrator";
+
 export async function api<T>(
   path: string,
   method = "GET",
@@ -40,6 +43,12 @@ export async function api<T>(
         : Array.isArray(data.detail)
           ? "Please check the form and try again."
           : "Something went wrong";
+    if (
+      response.status === 403 &&
+      message === accountBlockedMessage &&
+      path !== "/demo/login"
+    )
+      window.dispatchEvent(new Event("passit:account-blocked"));
     throw new Error(message);
   }
   return data;

@@ -47,6 +47,16 @@ The migration preserves existing stories and backfills completion times from fin
 
 Reporting currently aggregates stored metadata in memory; a large production dataset will need indexed database aggregation or rollups. Deploy the new migration before starting the updated API and worker. Docker Compose runs migrations automatically for the local demo.
 
+## Blocking users
+
+Open **Settings → Admin dashboard → Manage users** (Alex in the demo). Search by name or exact account ID, filter all/active/blocked accounts, and select **Block** or **Unblock**. Review the account in the confirmation dialog and optionally add a private reason of up to 500 characters. Administrators cannot block themselves or other administrators. Production uses the current `PASSIT_ADMIN_SUBJECTS` allowlist to protect administrator accounts.
+
+Each authenticated request checks the stored account block, so existing demo sessions and valid OIDC tokens cannot bypass it. A blocked session sees an account-blocked screen when its next request is denied; the client checks notifications every five seconds while signed in. A request already admitted before the block may finish. Sign out remains available, and public stories can still be viewed anonymously. Identity provider authentication remains managed by Entra; the block denies access to PassIt. Unblocking restores access, including an otherwise valid existing session; reload or sign in again to leave the blocked screen.
+
+Blocked accounts are excluded from user search, friend selection, and new random casts. New stories or groups cannot include them; a saved group containing a blocked account needs an available subset. Existing stories and contributions remain stored. Their assigned turns use the normal deadline and prepared automatic fallback, and publication continues to require each participant's explicit consent. A blocked participant's pending approval stays pending until they are unblocked and can decide.
+
+Block/unblock changes are recorded with the administrator, target account, timestamp, and private reason. Repeated identical requests create one action. The admin screen shows the latest 20 actions; the database retains the complete history. Only administrators can access this history, reasons, or the management API (`GET /api/admin/users`, `PUT /api/admin/users/{id}/block`, and `GET /api/admin/moderation`). The new migration leaves existing accounts unblocked and preserves their stories. No additional dependencies are required.
+
 ## Local development
 
 Requires Python 3.12+, [uv](https://docs.astral.sh/uv/), and Node.js 22+.
@@ -76,7 +86,7 @@ The creator's setup counts as their one contribution. Human submission and passi
 npm --prefix frontend run build
 ```
 
-All 39 backend tests have been run against SQLite and PostgreSQL 17, including concurrent human submissions, timeout races, duplicate jobs, expired leases, concurrent workers/reconcilers, publication decisions, private reads, production JWT validation, admin authorization, analytics periods/cohorts, AI usage/cost recording, and preservation of legacy data during migration. PostgreSQL tests require a **dedicated disposable database**: fixtures recreate its application tables. Set `PASSIT_TEST_DATABASE_URL` to its SQLAlchemy URL, then run the same pytest command.
+All 44 backend tests have been run against SQLite and PostgreSQL 17, including concurrent human submissions, timeout races, duplicate jobs, expired leases, concurrent workers/reconcilers, publication decisions, private reads, production JWT validation, admin authorization, account blocking with existing sessions and tokens, concurrent blocks, analytics periods/cohorts, AI usage/cost recording, and preservation of legacy data during migration. PostgreSQL tests require a **dedicated disposable database**: fixtures recreate its application tables. Set `PASSIT_TEST_DATABASE_URL` to its SQLAlchemy URL, then run the same pytest command.
 
 To exercise the complete UI, leave the development API, worker and web server running, install a Playwright Chromium browser (or set `PLAYWRIGHT_CHROMIUM_PATH` to your existing Chromium), then run:
 
@@ -85,9 +95,10 @@ To exercise the complete UI, leave the development API, worker and web server ru
 .venv/bin/python backend/tests/browser_smoke.py
 .venv/bin/python backend/tests/browser_languages.py
 .venv/bin/python backend/tests/browser_statistics.py
+.venv/bin/python backend/tests/browser_user_blocking.py
 ```
 
-The smoke test creates fictional demo stories and verifies creation, suggestion editing, draft retention, passing, separate publication approvals, discovery, outsider access, and the mobile layout. It saves screenshots under `/tmp`. The language smoke test checks all three translations, responsive layouts, saved preferences, account switching, draft retention, notifications, and error messages. The dashboard smoke test checks custom dates, presets, timezones, comparisons, charts, saved ranges, translations, mobile layouts, AI price controls, and administrator access restrictions. The CI workflow runs backend tests on both databases, a client build, and all three browser workflows; these checks have been validated locally.
+The smoke test creates fictional demo stories and verifies creation, suggestion editing, draft retention, passing, separate publication approvals, discovery, outsider access, and the mobile layout. It saves screenshots under `/tmp`. The language smoke test checks all three translations, responsive layouts, saved preferences, account switching, draft retention, notifications, and error messages. The dashboard smoke test checks custom dates, presets, timezones, comparisons, charts, saved ranges, translations, mobile layouts, AI price controls, and administrator access restrictions. The moderation smoke test checks search, confirmation, private action history, live blocked sessions, login denial, unblocking, translations, mobile layouts, and administrator-only controls. The CI workflow runs backend tests on both databases, a client build, and all four browser workflows; these checks have been validated locally.
 
 ## Implementation and deployment boundaries
 

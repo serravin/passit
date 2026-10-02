@@ -102,6 +102,12 @@ export default function Admin({
           "Manage participant limits, versioned AI profiles, and failed background work.",
         )}{" "}
       </p>
+      <button
+        className="button secondary"
+        onClick={() => navigate("admin/users")}
+      >
+        {t("Manage users")}
+      </button>
       {error && (
         <div className="alert" role="alert">
           {translateError(error)}

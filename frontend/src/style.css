@@ -2389,3 +2389,126 @@ footer > span:last-child {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.moderation-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 18px;
+  margin-bottom: 24px;
+}
+.moderation-filters .field {
+  margin: 0;
+}
+.moderation-page > .panel {
+  margin-bottom: 24px;
+}
+.moderation-page h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.moderation-user {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+}
+.moderation-user-details {
+  flex: 1;
+  min-width: 0;
+}
+.moderation-user h3 {
+  font-size: 17px;
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+}
+.moderation-user .status {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.account-id {
+  overflow-wrap: anywhere;
+  font-family: monospace;
+  font-size: 11px;
+}
+.moderation-history small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-weight: normal;
+}
+.moderation-reason {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.button.danger {
+  background: #a5372c;
+  color: #fff;
+  border-color: #a5372c;
+}
+.button.danger:hover {
+  background: #87281f;
+  border-color: #87281f;
+}
+.blocked-status {
+  background: #fbe5df;
+  color: #8e2f24;
+}
+.moderation-pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  margin-top: 20px;
+}
+.moderation-dialog h2 {
+  padding-right: 28px;
+  overflow-wrap: anywhere;
+}
+.moderation-dialog textarea {
+  width: 100%;
+}
+.moderation-dialog > p {
+  margin: 16px 0;
+}
+.moderation-history table {
+  min-width: 620px;
+}
+.moderation-history th,
+.moderation-history td {
+  vertical-align: top;
+  max-width: 230px;
+}
+@media (max-width: 760px) {
+  .moderation-filters {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+  .moderation-page .panel {
+    padding: 20px;
+  }
+  .moderation-user {
+    display: grid;
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .moderation-user .avatar {
+    align-self: start;
+  }
+  .moderation-user .button {
+    grid-column: 2;
+    justify-self: start;
+    margin-left: 0;
+  }
+  .moderation-pagination {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .moderation-page .section-heading {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+}
