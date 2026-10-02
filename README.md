@@ -9,7 +9,7 @@ The demo accepts both `http://localhost:8080` and `http://127.0.0.1:8080`. Origi
 With Docker Desktop (or Docker Engine and Compose v2) running:
 
 ```sh
-git clone --branch work https://github.com/serravin/passit.git
+git clone https://github.com/serravin/passit.git
 cd passit
 docker compose up --build -d
 ```
@@ -25,6 +25,27 @@ On 1 October 2026, `npm audit` reported zero known advisories in the locked Java
 The interface supports English, German, French, and Italian. Use the language selector in the header for an immediate change, or choose a language in Settings and save preferences. Guests start with their browser’s supported language; explicit choices persist in the browser. Signed-in players save their choice to their account, which takes precedence at sign-in.
 
 Navigation, game controls, forms, notifications, Motives, accessibility labels, and admin screens are translated. Story titles, contributions, rules, and group names retain their original text. Switching the interface language does not translate stored AI continuations; the local demo generator still supplies English samples. Translation catalogs are in `frontend/src/locales/`; English UI strings act as keys and fallbacks. No extra runtime dependencies are required.
+
+## Admin statistics
+
+Open **Settings → Admin dashboard**. In the local demo, Alex is the administrator. In production, set `PASSIT_ADMIN_SUBJECTS` to the comma-separated OIDC subject IDs allowed to administer the platform. Both the dashboard and `GET /api/admin/statistics` require an administrator; hiding the menu is not the access control.
+
+Choose custom inclusive start/end dates or Today, This week, MTD, YTD, Last 7 days, Last 30 days, or All time. Select an IANA reporting timezone such as `Europe/Berlin`; the range is saved in your browser. Weeks start on Monday. Comparisons use the previous equivalent period, including the same elapsed local day for ranges ending today; MTD compares the previous month to the same day, and YTD the previous year. All time has no comparison. Refresh retrieves a new snapshot.
+
+The dashboard includes:
+
+- Activity, recorded signups, started/completed/published stories, contribution types, average cast size, and the started-story completion funnel.
+- Activation rate and median time to first play, D1/D7/D30 retention, repeat players, repeated casts, and stories per active player.
+- Median response/completion times, timeout rates by allowed turn duration, publication decisions, retained likes, and background failures.
+- AI calls, failures, retries, median latency, tokens, estimated USD cost, and cost per completed story. Validation and demo calls are identified separately.
+
+An **active player** creates a story or submits a human contribution; creator setup counts. Browsing, signing in, likes, and automatic fallback contributions do not count. Activation measures the selected signup cohort's first play by the period end. Retention groups players by first play in the selected period and checks for another play on the exact local day 1, 7, or 30 afterward, including returns after the selected period. Only fully elapsed return days enter the denominator. The funnel follows stories started in the selected period through its end; completed/published headline counts instead measure events occurring in that period. Zero-denominator rates are unavailable.
+
+For AI cost estimates, enter both input/output USD prices per million tokens when creating an AI profile revision in **Configuration**. The server records the response token usage and those revision prices for each call, including billable responses whose generated content fails validation. This is a token-cost estimate, not an Azure invoice. Calls without reported usage or prices make the associated totals unavailable. Demo calls cost zero. Cost per completed story uses recorded game calls across each completed story's lifetime and requires complete coverage of its linked calls. Setup assistance happens before a story exists, so its cost appears in the total AI cost without being attributed to a completed story. Analytics records operational metadata only, without copying prompts, responses, names, or story text.
+
+The migration preserves existing stories and backfills completion times from final submitted turns. Unknown historical signup, like, job, and setup-assistance information remains unknown; the dashboard explains missing history rather than inventing dates or costs. Dated like counts include likes still retained, and failed jobs reflect the current status of jobs created in the range. All-time account/story totals describe currently stored records. Revenue, paying users, paid conversion, MRR, and cancellations show **Unavailable** until a payment integration exists. Growth/acquisition metrics are excluded.
+
+Reporting currently aggregates stored metadata in memory; a large production dataset will need indexed database aggregation or rollups. Deploy the new migration before starting the updated API and worker. Docker Compose runs migrations automatically for the local demo.
 
 ## Local development
 
@@ -55,7 +76,7 @@ The creator's setup counts as their one contribution. Human submission and passi
 npm --prefix frontend run build
 ```
 
-All 33 backend tests have been run against SQLite and PostgreSQL 17, including concurrent human submissions, timeout races, duplicate jobs, expired leases, concurrent workers/reconcilers, publication decisions, private reads, and production JWT validation. PostgreSQL tests require a **dedicated disposable database**: fixtures recreate its application tables. Set `PASSIT_TEST_DATABASE_URL` to its SQLAlchemy URL, then run the same pytest command.
+All 39 backend tests have been run against SQLite and PostgreSQL 17, including concurrent human submissions, timeout races, duplicate jobs, expired leases, concurrent workers/reconcilers, publication decisions, private reads, production JWT validation, admin authorization, analytics periods/cohorts, AI usage/cost recording, and preservation of legacy data during migration. PostgreSQL tests require a **dedicated disposable database**: fixtures recreate its application tables. Set `PASSIT_TEST_DATABASE_URL` to its SQLAlchemy URL, then run the same pytest command.
 
 To exercise the complete UI, leave the development API, worker and web server running, install a Playwright Chromium browser (or set `PLAYWRIGHT_CHROMIUM_PATH` to your existing Chromium), then run:
 
@@ -63,9 +84,10 @@ To exercise the complete UI, leave the development API, worker and web server ru
 .venv/bin/playwright install chromium
 .venv/bin/python backend/tests/browser_smoke.py
 .venv/bin/python backend/tests/browser_languages.py
+.venv/bin/python backend/tests/browser_statistics.py
 ```
 
-The smoke test creates fictional demo stories and verifies creation, suggestion editing, draft retention, passing, separate publication approvals, discovery, outsider access, and the mobile layout. It saves screenshots under `/tmp`. The language smoke test checks all three translations, responsive layouts, saved preferences, account switching, draft retention, notifications, and error messages. The CI workflow runs backend tests on both databases, a client build, and both browser workflows; these checks have been validated locally.
+The smoke test creates fictional demo stories and verifies creation, suggestion editing, draft retention, passing, separate publication approvals, discovery, outsider access, and the mobile layout. It saves screenshots under `/tmp`. The language smoke test checks all three translations, responsive layouts, saved preferences, account switching, draft retention, notifications, and error messages. The dashboard smoke test checks custom dates, presets, timezones, comparisons, charts, saved ranges, translations, mobile layouts, AI price controls, and administrator access restrictions. The CI workflow runs backend tests on both databases, a client build, and all three browser workflows; these checks have been validated locally.
 
 ## Implementation and deployment boundaries
 

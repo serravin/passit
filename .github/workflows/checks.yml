@@ -55,3 +55,4 @@ jobs:
           done
           .venv/bin/python backend/tests/browser_smoke.py
           .venv/bin/python backend/tests/browser_languages.py
+          .venv/bin/python backend/tests/browser_statistics.py

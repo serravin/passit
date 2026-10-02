@@ -31,6 +31,7 @@ import {
 import { api, identity } from "./api";
 import type { Chain, Config, Group, Me, Notice, Person, Turn } from "./api";
 import Admin from "./Admin";
+import Dashboard from "./Dashboard";
 
 type Navigate = (route: string) => void;
 type Action = (
@@ -418,8 +419,19 @@ export default function App() {
             switchPlayer={() => setLoginOpen(true)}
             demo={config.mode === "demo"}
           />
+        ) : route === "dashboard" ? (
+          me.admin ? (
+            <Dashboard key={me.id} navigate={navigate} version={version} />
+          ) : (
+            <Empty
+              icon={<LockKeyhole />}
+              title={t("Administrator access required")}
+            >
+              <p>{t("This dashboard is available only to administrators.")}</p>
+            </Empty>
+          )
         ) : route === "admin" && me.admin ? (
-          <Admin action={action} version={version} />
+          <Admin action={action} version={version} navigate={navigate} />
         ) : (
           <MyChains me={me} version={version} navigate={navigate} />
         )}
@@ -877,6 +889,7 @@ function Create({
   const [group, setGroup] = useState("");
   const [members, setMembers] = useState<string[]>([]);
   const [setup, setSetup] = useState("");
+  const [setupAssisted, setSetupAssisted] = useState(false);
   const [rules, setRules] = useState("");
   const [minimum, setMinimum] = useState(2);
   const [maximum, setMaximum] = useState(
@@ -931,6 +944,7 @@ function Create({
     await action(async () => {
       const chain = await api<Chain>("/chains", "POST", {
         setup,
+        setup_ai_assisted: setupAssisted,
         rules,
         group_mode: mode,
         source_group_id: mode === "saved_group" ? group : null,
@@ -997,6 +1011,7 @@ function Create({
                       {},
                     );
                     setSetup(result.setup);
+                    setSetupAssisted(true);
                   });
                   setHelping(false);
                 }}
@@ -1323,6 +1338,11 @@ function Story({
               )}
             </div>
             <p>{chain.setup}</p>
+            {chain.setup_ai_assisted && (
+              <div className="entry-footer">
+                {t("Written with an AI suggestion")}
+              </div>
+            )}
           </article>
           {chain.turns
             .filter((t) => t.status === "submitted")
@@ -2116,6 +2136,15 @@ function Preferences({
           <button className="button secondary" onClick={switchPlayer}>
             <Users size={17} />
             {t("Switch demo player")}{" "}
+          </button>
+        )}
+        {me.admin && (
+          <button
+            className="button secondary"
+            onClick={() => navigate("dashboard")}
+          >
+            <Compass size={17} />
+            {t("Admin dashboard")}
           </button>
         )}
         {me.admin && (

@@ -33,9 +33,11 @@ type AdminState = {
 export default function Admin({
   action,
   version,
+  navigate,
 }: {
   action: Action;
   version: number;
+  navigate: (route: string) => void;
 }) {
   const [state, setState] = useState<AdminState | null>(null);
   const [cap, setCap] = useState(20);
@@ -51,6 +53,8 @@ export default function Admin({
     request_timeout_seconds: 30,
     max_retries: 3,
     prompt_version: "v1",
+    input_price_per_million: null as number | null,
+    output_price_per_million: null as number | null,
   });
   const [parameters, setParameters] = useState(
     '{"max_completion_tokens": 500}',
@@ -88,6 +92,9 @@ export default function Admin({
   }
   return (
     <section className="page">
+      <button className="back-link" onClick={() => navigate("dashboard")}>
+        {t("Admin dashboard")}
+      </button>
       <span className="eyebrow">{t("BEHIND THE STORIES")}</span>
       <h1>{t("Platform configuration.")}</h1>
       <p className="page-intro">
@@ -376,6 +383,47 @@ export default function Admin({
               />
             </label>
           </div>
+          <div className="field-row">
+            <label className="field">
+              {t("Input price per 1M tokens (USD)")}
+              <input
+                type="number"
+                min={0}
+                max={100000}
+                step="any"
+                value={profile.input_price_per_million ?? ""}
+                onChange={(e) =>
+                  setProfile({
+                    ...profile,
+                    input_price_per_million:
+                      e.target.value === "" ? null : Number(e.target.value),
+                  })
+                }
+              />
+            </label>
+            <label className="field">
+              {t("Output price per 1M tokens (USD)")}
+              <input
+                type="number"
+                min={0}
+                max={100000}
+                step="any"
+                value={profile.output_price_per_million ?? ""}
+                onChange={(e) =>
+                  setProfile({
+                    ...profile,
+                    output_price_per_million:
+                      e.target.value === "" ? null : Number(e.target.value),
+                  })
+                }
+              />
+            </label>
+          </div>
+          <p className="help">
+            {t(
+              "Optional: set both USD token prices for cost estimates. Prices are saved with the revision; no historical costs are rewritten.",
+            )}
+          </p>
           <button className="button primary full" disabled={busy}>
             {t("Create revision")} <Check size={17} />
           </button>

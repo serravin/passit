@@ -86,6 +86,8 @@ def test_metrics_activity_cohorts_retention_cost_and_privacy(game):
             for user in (alex, jamie, sam):
                 s.add(Participant(chain_id=chain.id, user_id=user.id, contributed=True))
             stories.append(chain)
+        stories[1].setup_ai_assisted = True
+        stories[2].setup_ai_assisted = None  # Historical setup assistance was not recorded.
         chain = stories[0]
         chain.status = "completed"
         chain.completed_at = at(5)
@@ -159,8 +161,9 @@ def test_metrics_activity_cohorts_retention_cost_and_privacy(game):
     assert metrics["stories_started"] == 3 and metrics["stories_completed"] == 1
     assert metrics["completion_rate"] == 33.33 and metrics["cohort_in_progress"] == 2
     assert metrics["avg_players"] == 3
-    assert metrics["contributions"] == 5 and metrics["human_written"] == 3
-    assert metrics["ai_assisted"] == 1 and metrics["automatic"] == 1
+    assert metrics["contributions"] == 5 and metrics["human_written"] == 1
+    assert metrics["ai_assisted"] == 2 and metrics["automatic"] == 1
+    assert metrics["unclassified_setups"] == 1
     assert metrics["timeout_rate"] == 50 and metrics["response_minutes"] == 2
     assert metrics["stories_per_active_user"] == 2 and metrics["repeat_player_rate"] == 50
     assert metrics["repeat_groups"] == 1

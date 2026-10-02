@@ -31,7 +31,7 @@ def test_translation_catalogs_cover_interface_and_preserve_placeholders():
             assert translation.strip(), key
             assert set(re.findall(r"\{\w+\}", key)) == set(re.findall(r"\{\w+\}", translation)), key
     # Static calls use English as their fallback; every one must be translated.
-    for file in ("App.tsx", "Admin.tsx", "i18n.ts"):
+    for file in ("App.tsx", "Admin.tsx", "Dashboard.tsx", "i18n.ts"):
         for literal in re.findall(r'\bt\(\s*("(?:[^"\\]|\\.)*")', (source / file).read_text()):
             assert json.loads(literal) in keys, (file, literal)
     from passit.seed import MOTIVES

@@ -40,6 +40,7 @@ def test_upgrade_preserves_stories_and_does_not_invent_historical_dates(tmp_path
         assert conn.scalar(text("SELECT setup FROM chains WHERE id='c'")) == "Keep this private story"
         assert conn.scalar(text("SELECT text FROM turns WHERE id='t'")) == "A private ending"
         assert conn.scalar(text("SELECT completed_at FROM chains WHERE id='c'")) == "2026-01-02 11:10:00"
+        assert conn.scalar(text("SELECT setup_ai_assisted FROM chains WHERE id='c'")) is None
         for table in ("users", "likes", "work_items"):
             assert conn.scalar(text(f"SELECT created_at FROM {table}")) is None
         assert conn.scalar(text("SELECT COUNT(*) FROM analytics_state")) == 1

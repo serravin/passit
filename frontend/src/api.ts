@@ -85,6 +85,7 @@ export type Chain = {
   title: string;
   title_pending: boolean;
   setup: string;
+  setup_ai_assisted: boolean | null;
   rules: string;
   creator_id: string;
   creator?: Person;
