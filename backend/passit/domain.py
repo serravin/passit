@@ -141,6 +141,7 @@ def launch(s, creator, data):
         id=uid(),
         creator_id=creator.id,
         setup=data.setup,
+        setup_ai_assisted=data.setup_ai_assisted,
         rules=data.rules,
         group_mode=data.group_mode,
         source_group_id=data.source_group_id,
@@ -192,6 +193,7 @@ def assign(s, chain, motive_id, timestamp=None):
     )
     if not eligible:
         chain.status = "completed"
+        chain.completed_at = timestamp or now()
         return
     if motive_id == "end" and len(eligible) != 1:
         raise ValueError("End motive requires the final participant")
@@ -238,6 +240,7 @@ def complete_turn(s, chain, turn, text, assisted=False, generated=False, timesta
         queue(s, "handoff", chain.id, f"handoff:{chain.id}:{turn.position}")
     else:
         chain.status = "completed"
+        chain.completed_at = timestamp
         for participant in s.scalars(select(Participant).where(Participant.chain_id == chain.id)):
             notify(s, participant.user_id, chain.id, "The finale is here. Your completed story is ready.")
     return True

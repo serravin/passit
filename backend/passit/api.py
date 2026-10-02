@@ -1,5 +1,6 @@
 import secrets
 from contextlib import asynccontextmanager
+from datetime import date as calendar_date
 from datetime import timedelta
 from typing import Annotated
 from urllib.parse import urlsplit
@@ -11,6 +12,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, or_, select
 
 from .ai import CreativeAI
+from .analytics import report
 from .auth import digest, optional_user, require_admin, require_user
 from .config import Settings
 from .db import Database
@@ -48,6 +50,7 @@ from .schemas import (
     Submission,
 )
 from .seed import initialize
+from .telemetry import measured_generate
 from .views import chain_view, date, user_view
 
 CurrentUser = Annotated[User, Depends(require_user)]
@@ -435,9 +438,21 @@ def create_app(settings=None, db=None):
                 fail("AI is not configured", 503)
             profile = s.get(AIProfile, assignment.profile_id)
             try:
-                return CreativeAI(settings).generate(profile, "setup", {"theme": data.theme})
+                return measured_generate(db, CreativeAI(settings), profile, "setup", {"theme": data.theme})
             except Exception:
                 fail("Setup assistance is unavailable; you can write your own setup", 503)
+
+    @app.get("/api/admin/statistics")
+    def statistics(
+        user: Admin,
+        preset: str = Query(default="mtd", max_length=30),
+        start: calendar_date | None = None,
+        end: calendar_date | None = None,
+        timezone: str = Query(default="UTC", max_length=100),
+    ):
+        with db.sessions() as s:
+            result = report(s, preset=preset, start_date=start, end_date=end, timezone=timezone)
+            return {**result, "mode": settings.mode}
 
     @app.get("/api/admin")
     def admin_state(user: Admin):
@@ -515,7 +530,7 @@ def create_app(settings=None, db=None):
             try:
                 adapter = CreativeAI(settings)
                 for task in ("handoff", "suggestions", "title", "setup"):
-                    adapter.generate(profile, task, context)
+                    measured_generate(db, adapter, profile, task, context, purpose="validation")
             except Exception as exc:
                 fail(
                     f"AI validation failed ({type(exc).__name__}); check connectivity and model parameters",

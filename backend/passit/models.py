@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -36,6 +37,7 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(80))
     color: Mapped[str] = mapped_column(String(20), default="#fbbf24")
     admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=now, index=True)
     __table_args__ = (UniqueConstraint("issuer", "subject"),)
 
 
@@ -89,6 +91,7 @@ class Chain(Base):
     creator_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     title: Mapped[str | None] = mapped_column(String(100))
     setup: Mapped[str] = mapped_column(Text)
+    setup_ai_assisted: Mapped[bool | None] = mapped_column(Boolean, default=False)
     rules: Mapped[str] = mapped_column(String(500), default="")
     group_mode: Mapped[str] = mapped_column(String(20))
     source_group_id: Mapped[str | None] = mapped_column(ForeignKey("groups.id"))
@@ -97,6 +100,7 @@ class Chain(Base):
     publication_status: Mapped[str] = mapped_column(String(20), default="not_requested")
     publication_requester_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     publication_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     turn_timeout_seconds: Mapped[int] = mapped_column(Integer, default=900)
@@ -162,6 +166,7 @@ class Approval(Base):
 
 class Like(Base):
     __tablename__ = "likes"
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=now, index=True)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     chain_id: Mapped[str | None] = mapped_column(ForeignKey("chains.id"))
@@ -190,6 +195,8 @@ class AIProfile(Base):
     generation_parameters: Mapped[dict] = mapped_column(JSON, default=dict)
     request_timeout_seconds: Mapped[int] = mapped_column(Integer, default=30)
     max_retries: Mapped[int] = mapped_column(Integer, default=3)
+    input_price_per_million: Mapped[float | None] = mapped_column(Numeric(16, 6))
+    output_price_per_million: Mapped[float | None] = mapped_column(Numeric(16, 6))
     prompt_version: Mapped[str] = mapped_column(String(20), default="v1")
     updated_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
@@ -206,6 +213,7 @@ class WorkItem(Base):
     """Transactional outbox with durable local delivery; replace transport with Service Bus on Azure."""
 
     __tablename__ = "work_items"
+    created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=now, index=True)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     key: Mapped[str] = mapped_column(String(200), unique=True)
     task: Mapped[str] = mapped_column(String(30))
@@ -228,3 +236,30 @@ class Notification(Base):
     message: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     read: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class AnalyticsState(Base):
+    __tablename__ = "analytics_state"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class AICall(Base):
+    """Operational metadata only: never store prompts, responses, credentials or user text."""
+
+    __tablename__ = "ai_calls"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    profile_id: Mapped[str | None] = mapped_column(ForeignKey("ai_profiles.id"))
+    chain_id: Mapped[str | None] = mapped_column(ForeignKey("chains.id"), index=True)
+    work_item_id: Mapped[str | None] = mapped_column(ForeignKey("work_items.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(30))
+    task: Mapped[str] = mapped_column(String(30))
+    purpose: Mapped[str] = mapped_column(String(20), default="game")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+    duration_ms: Mapped[int] = mapped_column(Integer)
+    succeeded: Mapped[bool] = mapped_column(Boolean)
+    is_retry: Mapped[bool] = mapped_column(Boolean, default=False)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    estimated_cost_usd: Mapped[float | None] = mapped_column(Numeric(18, 8))
+    error_code: Mapped[str | None] = mapped_column(String(80))

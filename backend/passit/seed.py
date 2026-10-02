@@ -5,6 +5,7 @@ from sqlalchemy import select
 from .models import (
     AIAssignment,
     AIProfile,
+    AnalyticsState,
     Friendship,
     Group,
     GroupMember,
@@ -29,6 +30,8 @@ MOTIVES = [
 
 def initialize(db, demo=False):
     with db.transaction() as s:
+        if not s.get(AnalyticsState, 1):
+            s.add(AnalyticsState(id=1))
         if not s.get(PlatformSettings, 1):
             s.add(PlatformSettings(id=1, max_participants_per_chain=20))
         for mid, label, emoji in MOTIVES:

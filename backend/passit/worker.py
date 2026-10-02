@@ -10,6 +10,7 @@ from .config import Settings
 from .db import Database
 from .domain import assign, lock_chain, queue, story_context, timeout
 from .models import AIProfile, Chain, Turn, WorkItem, now, uid
+from .telemetry import measured_generate
 
 log = logging.getLogger("passit.worker")
 
@@ -98,7 +99,14 @@ class Worker:
                 skip = turn.status == "submitted" or turn.suggestions is not None
             else:
                 context, skip = {}, True
-            output = self.ai.generate(profile, task, context) if not skip else None
+            chain_id = turn.chain_id if task == "suggestions" else aggregate
+            output = (
+                measured_generate(
+                    self.db, self.ai, profile, task, context, chain_id=chain_id, work_item_id=item_id
+                )
+                if not skip
+                else None
+            )
         with self.db.transaction() as s:
             item = s.scalar(select(WorkItem).where(WorkItem.id == item_id).with_for_update())
             if item.status != "processing" or item.lease_token != token:

@@ -8,9 +8,15 @@ version = "0.1.0"
 description = "Stories nobody writes alone"
 requires-python = ">=3.12"
 dependencies = [
-  "fastapi>=0.115,<1", "uvicorn>=0.30,<1", "sqlalchemy>=2.0,<3",
-  "alembic>=1.13,<2", "httpx>=0.28,<1", "psycopg[binary]>=3.2,<4",
-  "PyJWT[crypto]>=2.10,<3", "azure-identity>=1.19,<2",
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+  "sqlalchemy>=2.0,<3",
+  "alembic>=1.13,<2",
+  "httpx>=0.28,<1",
+  "psycopg[binary]>=3.2,<4",
+  "PyJWT[crypto]>=2.10,<3",
+  "azure-identity>=1.19,<2",
+  "tzdata>=2025.1",
 ]
 
 [project.optional-dependencies]

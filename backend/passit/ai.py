@@ -6,6 +6,8 @@ from urllib.parse import quote, urlsplit
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from .telemetry import capture_usage
+
 
 class MotiveOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -198,4 +200,6 @@ class CreativeAI:
                 json=body,
             )
             response.raise_for_status()
-            return json.loads(response.json()["choices"][0]["message"]["content"])
+            data = response.json()
+            capture_usage(data.get("usage"))
+            return json.loads(data["choices"][0]["message"]["content"])

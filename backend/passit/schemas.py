@@ -9,6 +9,7 @@ class Input(BaseModel):
 
 class Launch(Input):
     setup: str = Field(min_length=1, max_length=1500)
+    setup_ai_assisted: bool = False
     rules: str = Field(default="", max_length=500)
     group_mode: Literal["friends", "saved_group", "random"] = "friends"
     source_group_id: str | None = None
@@ -62,6 +63,8 @@ class ProfileInput(Input):
     request_timeout_seconds: int = Field(default=30, ge=1, le=60)
     max_retries: int = Field(default=3, ge=0, le=8)
     prompt_version: Literal["v1"] = "v1"
+    input_price_per_million: float | None = Field(default=None, ge=0, le=100000, allow_inf_nan=False)
+    output_price_per_million: float | None = Field(default=None, ge=0, le=100000, allow_inf_nan=False)
 
     @field_validator("generation_parameters")
     @classmethod
