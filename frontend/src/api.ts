@@ -15,8 +15,7 @@ export const identity = authority
     })
   : null;
 
-export const accountBlockedMessage =
-  "Your account has been blocked by an administrator";
+export const accountBlockedMessage = "Your account has been blocked";
 
 export async function api<T>(
   path: string,
@@ -120,4 +119,17 @@ export type Notice = {
   chain_id: string;
   message: string;
   read: boolean;
+};
+
+export type AccountNotice = {
+  id: string;
+  kind: string;
+  source: string;
+  categories: string[];
+  created_at: string;
+};
+export type AccountStatus = {
+  user_id: string;
+  blocked_at: string | null;
+  notices: AccountNotice[];
 };

@@ -21,7 +21,8 @@ type UserPage = { items: User[]; total: number; offset: number; limit: number };
 type Event = {
   id: string;
   user: Person;
-  admin: Person;
+  admin: Person | null;
+  source: string;
   blocked: boolean;
   reason: string | null;
   created_at: string;
@@ -151,6 +152,12 @@ export default function UserManagement({
       </button>
       <span className="eyebrow">{t("KEEP THE GAME WELCOMING")}</span>
       <h1>{t("User management.")}</h1>
+      <button
+        className="button secondary"
+        onClick={() => navigate("admin/safety")}
+      >
+        {t("Safety reviews")}
+      </button>
       <p className="page-intro">
         {t("Find accounts and manage access when someone misuses the app.")}
       </p>
@@ -345,7 +352,7 @@ export default function UserManagement({
                           <small className="account-id">{event.user.id}</small>
                         </th>
                         <td>{t(event.blocked ? "Blocked" : "Unblocked")}</td>
-                        <td>{event.admin.name}</td>
+                        <td>{event.admin?.name || t("Automated guardrail")}</td>
                         <td>{date(event.created_at)}</td>
                         <td className="moderation-reason">
                           {event.reason || "—"}

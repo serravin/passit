@@ -14,7 +14,7 @@ def digest(token):
 
 def check_access(user):
     if user and user.blocked_at is not None:
-        raise HTTPException(403, "Your account has been blocked by an administrator")
+        raise HTTPException(403, "Your account has been blocked")
     return user
 
 

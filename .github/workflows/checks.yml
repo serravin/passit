@@ -57,3 +57,4 @@ jobs:
           .venv/bin/python backend/tests/browser_languages.py
           .venv/bin/python backend/tests/browser_statistics.py
           .venv/bin/python backend/tests/browser_user_blocking.py
+          .venv/bin/python backend/tests/browser_guardrails.py
