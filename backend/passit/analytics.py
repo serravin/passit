@@ -182,7 +182,7 @@ def report(s, *, preset="mtd", start_date=None, end_date=None, timezone="UTC", s
         members[chain_id].add(user_id)
     per_chain_calls = defaultdict(list)
     for call in calls:
-        if call["chain_id"] and call["purpose"] == "game":
+        if call["chain_id"] and call["purpose"] in {"game", "guardrail"}:
             per_chain_calls[call["chain_id"]].append(call)
 
     history_intact = (
@@ -304,6 +304,7 @@ def report(s, *, preset="mtd", start_date=None, end_date=None, timezone="UTC", s
             if costs and len(costs) == len(completed)
             else None,
             "validation_calls": sum(c["purpose"] == "validation" for c in selected_calls),
+            "guardrail_calls": sum(c["purpose"] == "guardrail" for c in selected_calls),
             "demo_calls": sum(c["provider"] == "demo" for c in selected_calls),
             "paying_users": None,
             "paid_conversion": None,

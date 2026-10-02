@@ -90,7 +90,11 @@ class ProfileInput(Input):
 
 
 class ActivateProfile(Input):
-    task: Literal["default", "handoff", "suggestions", "title", "setup"] = "default"
+    task: Literal["default", "handoff", "suggestions", "title", "setup", "guardrail"] = "default"
+
+
+class SafetyDecision(Input):
+    decision: Literal["allow", "confirm"]
 
 
 class SetupRequest(Input):

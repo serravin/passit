@@ -2,7 +2,7 @@ import secrets
 from datetime import UTC, timedelta
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
 from .models import (
     AIAssignment,
@@ -36,7 +36,14 @@ def require_member(s, chain_id, user_id, allow_published=False):
     chain = s.get(Chain, chain_id)
     if not chain:
         fail("Story not found", 404)
-    if allow_published and chain.visibility == "published" and chain.status == "completed":
+    if chain.safety_status == "flagged":
+        fail("Story is held for safety review", 404)
+    if (
+        allow_published
+        and chain.visibility == "published"
+        and chain.status == "completed"
+        and chain.safety_status == "approved"
+    ):
         return chain
     if not user_id or not s.get(Participant, (chain_id, user_id)):
         fail("Story not found", 404)
@@ -54,8 +61,12 @@ def queue(s, task, aggregate, key, payload=None, available_at=None):
     if s.scalar(select(WorkItem).where(WorkItem.key == key)):
         return
     profile_id = None
-    if task in {"handoff", "suggestions", "title", "setup"}:
-        assignment = s.get(AIAssignment, task) or s.get(AIAssignment, "default")
+    if task in {"handoff", "suggestions", "title", "setup", "guard_scan"}:
+        assignment = (
+            s.get(AIAssignment, "guardrail")
+            if task == "guard_scan"
+            else (s.get(AIAssignment, task) or s.get(AIAssignment, "default"))
+        )
         if not assignment:
             fail("An administrator must activate an AI profile before starting a Chain", 503)
         profile_id = assignment.profile_id
@@ -76,6 +87,23 @@ def notify(s, user_id, chain_id, message):
     preferences = s.get(UserSettings, user_id)
     if preferences and preferences.notifications_enabled:
         s.add(Notification(user_id=user_id, chain_id=chain_id, message=message))
+
+
+def invalidate_prepared_text(s):
+    unfinished = select(Turn.id).where(Turn.status != "submitted")
+    s.execute(
+        update(WorkItem)
+        .where(WorkItem.task == "suggestions", WorkItem.aggregate_id.in_(unfinished))
+        .values(
+            status="pending",
+            attempts=0,
+            available_at=now(),
+            lease_token=None,
+            lease_until=None,
+            error_code=None,
+        )
+    )
+    s.execute(update(Turn).where(Turn.status != "submitted").values(suggestions=None, fallback_index=None))
 
 
 def friends(s, user_id):
@@ -233,6 +261,8 @@ def complete_turn(s, chain, turn, text, assisted=False, generated=False, timesta
     turn.text = text
     turn.ai_assisted = assisted
     turn.ai_generated = generated
+    if generated:
+        turn.safety_origin = "ai"
     turn.submitted_at = timestamp
     turn.status = "submitted"
     turn.suggestions = None

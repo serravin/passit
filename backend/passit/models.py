@@ -40,6 +40,7 @@ class User(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=now, index=True)
     blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     block_reason: Mapped[str | None] = mapped_column(String(500))
+    guardrail_block_id: Mapped[str | None] = mapped_column(String(36))
     __table_args__ = (UniqueConstraint("issuer", "subject"),)
 
 
@@ -47,7 +48,8 @@ class UserModerationEvent(Base):
     __tablename__ = "user_moderation_events"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    admin_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    admin_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    source: Mapped[str] = mapped_column(String(20), default="admin")
     blocked: Mapped[bool] = mapped_column(Boolean)
     reason: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
@@ -104,10 +106,12 @@ class Chain(Base):
     title: Mapped[str | None] = mapped_column(String(100))
     setup: Mapped[str] = mapped_column(Text)
     setup_ai_assisted: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    safety_origin: Mapped[str | None] = mapped_column(String(20))
     rules: Mapped[str] = mapped_column(String(500), default="")
     group_mode: Mapped[str] = mapped_column(String(20))
     source_group_id: Mapped[str | None] = mapped_column(ForeignKey("groups.id"))
     status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    safety_status: Mapped[str] = mapped_column(String(20), default="approved", index=True)
     visibility: Mapped[str] = mapped_column(String(20), default="participants_only")
     publication_status: Mapped[str] = mapped_column(String(20), default="not_requested")
     publication_requester_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
@@ -140,6 +144,7 @@ class Motive(Base):
 
 class Turn(Base):
     __tablename__ = "turns"
+    safety_origin: Mapped[str | None] = mapped_column(String(20))
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     chain_id: Mapped[str] = mapped_column(ForeignKey("chains.id"), index=True)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
@@ -264,6 +269,7 @@ class AICall(Base):
     profile_id: Mapped[str | None] = mapped_column(ForeignKey("ai_profiles.id"))
     chain_id: Mapped[str | None] = mapped_column(ForeignKey("chains.id"), index=True)
     work_item_id: Mapped[str | None] = mapped_column(ForeignKey("work_items.id"), index=True)
+    operation_key: Mapped[str | None] = mapped_column(String(64))
     provider: Mapped[str] = mapped_column(String(30))
     task: Mapped[str] = mapped_column(String(30))
     purpose: Mapped[str] = mapped_column(String(20), default="game")
@@ -275,3 +281,46 @@ class AICall(Base):
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     estimated_cost_usd: Mapped[float | None] = mapped_column(Numeric(18, 8))
     error_code: Mapped[str | None] = mapped_column(String(80))
+
+
+class SafetyReview(Base):
+    __tablename__ = "safety_reviews"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    key: Mapped[str] = mapped_column(String(64), unique=True)
+    profile_id: Mapped[str] = mapped_column(ForeignKey("ai_profiles.id"))
+    user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    chain_id: Mapped[str | None] = mapped_column(ForeignKey("chains.id"), index=True)
+    turn_id: Mapped[str | None] = mapped_column(ForeignKey("turns.id"))
+    kind: Mapped[str] = mapped_column(String(30))
+    origin: Mapped[str] = mapped_column(String(20))
+    allowed: Mapped[bool] = mapped_column(Boolean)
+    categories: Mapped[list] = mapped_column(JSON, default=list)
+    # Keep evidence only for flagged content, accessible through the admin review API.
+    text: Mapped[str | None] = mapped_column(Text)
+    context: Mapped[dict | None] = mapped_column(JSON)
+    review_status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
+    reviewer_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+
+
+class AccountNotice(Base):
+    __tablename__ = "account_notices"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))
+    source: Mapped[str] = mapped_column(String(20))
+    categories: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    read: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class GeneratedTextProof(Base):
+    """Hashes of text delivered by the application, scoped to its recipient and turn."""
+
+    __tablename__ = "generated_text_proofs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    turn_id: Mapped[str | None] = mapped_column(ForeignKey("turns.id"))
+    kind: Mapped[str] = mapped_column(String(20))
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)

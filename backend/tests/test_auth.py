@@ -69,6 +69,9 @@ def test_production_oidc_validates_issuer_audience_signature_expiry_and_subject(
         )
         # A valid JWT cannot bypass a local block; neither can a changed name.
         assert client.get("/api/me", headers=ordinary_headers).status_code == 403
+        status = client.get("/api/account-status", headers=ordinary_headers)
+        assert status.status_code == 200 and status.json()["blocked_at"]
+        assert status.json()["notices"][0]["source"] == "admin"
         assert (
             client.get(
                 "/api/discover", headers=header({**claims, "sub": "ordinary", "name": "Renamed"})
