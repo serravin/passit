@@ -71,9 +71,17 @@ Run the migration before starting the updated API and worker. Existing stories b
 
 The local demo recognizes only the explicit fictional marker `[[demo:bullying]]` to exercise blocking and review. It **does not detect real inappropriate text**. No new runtime libraries were added.
 
+## Azure test deployment
+
+Create and configure your Azure test resources yourself, then follow [the manual Azure/GitHub setup guide](docs/azure-test-deployment.md). The workflow deploys to existing Container Apps and a manual migration job; it provisions no infrastructure. You choose the GitHub Environment name and resource names. Keep production in a separate environment.
+
+Pull requests and pushes run Ruff, ESLint, formatting checks, tests and Trivy source/image scans. HIGH/CRITICAL findings or scanner failures block deployment. Once configured and enabled, `main` deploys scanned images by digest, waits for migration success, updates the apps and checks production mode, authentication, HTTPS routing and healthy revisions. A manual **Publish images only** option supplies images for your initial Portal setup. Azure deployment is disabled until you set `AZURE_TEST_DEPLOY_ENABLED=true`; the initial publishing option is explicitly selected in Actions.
+
+The local workflow/configuration checks and deployment tests pass. Docker Hub rate-limited image builds and the network policy blocked Trivy's vulnerability database, so full image/dependency scans still need to pass on GitHub. No Azure deployment was performed here.
+
 ## Local development
 
-Requires Python 3.12+, [uv](https://docs.astral.sh/uv/), and Node.js 22+.
+Requires Python 3.12+, [uv](https://docs.astral.sh/uv/), and Node.js 22.13+ (CI uses Node 24).
 
 ```sh
 bash scripts/install.sh
@@ -97,10 +105,12 @@ The creator's setup counts as their one contribution. Human submission and passi
 ```sh
 .venv/bin/pytest -q
 .venv/bin/ruff check backend
+npm --prefix frontend run lint
+npm --prefix frontend run format:check
 npm --prefix frontend run build
 ```
 
-All 62 backend tests have been run against SQLite and PostgreSQL 17, including concurrent human submissions, timeout races, duplicate jobs, expired leases, concurrent workers/reconcilers, publication decisions, private reads, production JWT validation, admin authorization, blocking with existing sessions and tokens, concurrent blocks, analytics, AI usage/cost recording, and legacy migrations. Guardrail tests cover automatic bans, notices, false-positive reversal, human/AI attribution, outages, malformed responses, profile changes during inference and deadline enforcement. PostgreSQL tests require a **dedicated disposable database**: fixtures recreate its application tables. Set `PASSIT_TEST_DATABASE_URL` to its SQLAlchemy URL, then run the same pytest command.
+All 75 backend/deployment tests have been run against SQLite and PostgreSQL 17, including concurrent human submissions, timeout races, duplicate jobs, expired leases, concurrent workers/reconcilers, publication decisions, private reads, production JWT validation, admin authorization, blocking with existing sessions and tokens, concurrent blocks, analytics, AI usage/cost recording, and legacy migrations. Guardrail tests cover automatic bans, notices, false-positive reversal, human/AI attribution, outages, malformed responses, profile changes during inference and deadline enforcement. Deployment tests cover migration failure/concurrency, image digest pinning, production/authentication checks, unhealthy revisions, secret-safe errors, existing resource validation and image-only bootstrap. PostgreSQL tests require a **dedicated disposable database**: fixtures recreate its application tables. Set `PASSIT_TEST_DATABASE_URL` to its SQLAlchemy URL, then run the same pytest command.
 
 To exercise the complete UI, leave the development API, worker and web server running, install a Playwright Chromium browser (or set `PLAYWRIGHT_CHROMIUM_PATH` to your existing Chromium), then run:
 

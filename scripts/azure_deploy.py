@@ -39,10 +39,12 @@ def require(condition, message):
         raise DeploymentError(message)
 
 
-def settings(environ):
-    missing = [name for name in REQUIRED if not environ.get(name, "").strip()]
+def settings(environ, publish_only=False):
+    resource_names = {"AZURE_WEB_APP", "AZURE_API_APP", "AZURE_WORKER_APP", "AZURE_MIGRATION_JOB"}
+    required = [name for name in REQUIRED if not publish_only or name not in resource_names]
+    missing = [name for name in required if not environ.get(name, "").strip()]
     require(not missing, "Configure these GitHub variables: " + ", ".join(missing))
-    values = {name: environ[name].strip() for name in REQUIRED}
+    values = {name: environ[name].strip() for name in required}
     require(re.fullmatch(r"[0-9a-f]{40}", values["COMMIT_SHA"]), "COMMIT_SHA must identify a full commit")
     authority = urlsplit(values["VITE_OIDC_AUTHORITY"])
     require(
@@ -57,8 +59,9 @@ def settings(environ):
         "openid" in scopes and scopes - {"openid", "profile", "email", "offline_access"},
         "VITE_OIDC_SCOPE must include openid and your API scope",
     )
-    names = [values[f"AZURE_{kind}_APP"] for kind in ("WEB", "API", "WORKER")]
-    require(len(set(names)) == 3, "Web, API and worker must be distinct Container Apps")
+    if not publish_only:
+        names = [values[f"AZURE_{kind}_APP"] for kind in ("WEB", "API", "WORKER")]
+        require(len(set(names)) == 3, "Web, API and worker must be distinct Container Apps")
     values["authority_origin"] = f"https://{authority.netloc}"
     return values
 
@@ -104,13 +107,12 @@ def backend_config(item, label, origin):
         "PASSIT_OIDC_ISSUER",
         "PASSIT_OIDC_AUDIENCE",
         "PASSIT_OIDC_JWKS_URL",
-        "PASSIT_ADMIN_SUBJECTS",
     ):
         require(env.get(name), f"{label}: configure {name}")
     require(env["PASSIT_OIDC_JWKS_URL"].startswith("https://"), f"{label}: JWKS must use HTTPS")
 
 
-def preflight(config):
+def registry_target(config):
     group = config["AZURE_RESOURCE_GROUP"]
     account = az("account", "show")
     require(account["id"] == config["AZURE_SUBSCRIPTION_ID"], "Azure login uses the wrong subscription")
@@ -118,7 +120,12 @@ def preflight(config):
     require(
         not registry.get("adminUserEnabled"), "Disable the registry admin account and use managed identity"
     )
-    server = registry["loginServer"]
+    return registry["loginServer"]
+
+
+def preflight(config):
+    group = config["AZURE_RESOURCE_GROUP"]
+    server = registry_target(config)
     apps = {
         kind: az(
             "containerapp", "show", "--name", config[f"AZURE_{kind.upper()}_APP"], "--resource-group", group
@@ -366,9 +373,31 @@ def deploy(config, images):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--images", type=Path, required=True)
+    parser.add_argument(
+        "--publish-only", action="store_true", help="Publish scanned images for manual initial setup"
+    )
     args = parser.parse_args()
     try:
-        deploy(settings(os.environ), args.images)
+        config = settings(os.environ, publish_only=args.publish_only)
+        if args.publish_only:
+            for component in ("api", "web"):
+                require(
+                    (args.images / f"{component}.tar").is_file(), f"The scanned {component} image is missing"
+                )
+            server = registry_target(config)
+            images = publish_images(config, args.images, server)
+            print(
+                "Scanned images published. Create the test apps and migration job manually using these images:"
+            )
+            for image in images.values():
+                print(image)
+            if path := os.getenv("GITHUB_STEP_SUMMARY"):
+                with open(path, "a") as summary:
+                    summary.write("Scanned test images published for manual setup:\n\n")
+                    for component, image in images.items():
+                        summary.write(f"- {component}: `{image}`\n")
+        else:
+            deploy(config, args.images)
     except (DeploymentError, KeyError, ValueError, OSError) as exc:
         # Generic parse/network errors must not disclose Azure response bodies or credentials.
         message = str(exc) if isinstance(exc, DeploymentError) else type(exc).__name__

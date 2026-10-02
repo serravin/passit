@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish_images_only:
+        description: Publish scanned images to your existing registry for first-time manual setup
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -174,13 +179,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Save the scanned image
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AZURE_TEST_DEPLOY_ENABLED == 'true'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
           COMPONENT: ${{ matrix.component }}
           COMMIT_SHA: ${{ github.sha }}
         run: docker save "passit-$COMPONENT:$COMMIT_SHA" -o "$COMPONENT.tar"
       - name: Pass the scanned image to deployment
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AZURE_TEST_DEPLOY_ENABLED == 'true'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: image-${{ matrix.component }}
@@ -188,9 +193,9 @@ jobs:
           retention-days: 1
 
   deploy-test:
-    name: Deploy to existing Azure test environment
+    name: ${{ inputs.publish_images_only && 'Publish test images only' || 'Deploy to existing Azure test environment' }}
     needs: [lint, tests, security, containers]
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && vars.AZURE_TEST_DEPLOY_ENABLED == 'true'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (vars.AZURE_TEST_DEPLOY_ENABLED == 'true' || (github.event_name == 'workflow_dispatch' && inputs.publish_images_only))
     runs-on: ubuntu-latest
     timeout-minutes: 40
     environment:
@@ -230,4 +235,10 @@ jobs:
           VITE_OIDC_CLIENT_ID: ${{ vars.VITE_OIDC_CLIENT_ID }}
           VITE_OIDC_SCOPE: ${{ vars.VITE_OIDC_SCOPE }}
           COMMIT_SHA: ${{ github.sha }}
-        run: python scripts/azure_deploy.py --images images
+          PUBLISH_IMAGES_ONLY: ${{ inputs.publish_images_only || false }}
+        run: |
+          if [ "$PUBLISH_IMAGES_ONLY" = true ]; then
+            python scripts/azure_deploy.py --images images --publish-only
+          else
+            python scripts/azure_deploy.py --images images
+          fi

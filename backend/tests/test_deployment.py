@@ -1,5 +1,6 @@
 """Critical deployment guards, with no Azure credentials or external resources."""
 
+import copy
 import importlib.util
 import subprocess
 from pathlib import Path
@@ -144,3 +145,133 @@ def test_plaintext_database_credentials_are_rejected():
     }
     with pytest.raises(release.DeploymentError, match="secret reference"):
         release.backend_config(item, "api", "https://web.example")
+
+
+def test_bootstrap_can_publish_without_creating_or_requiring_app_resources(tmp_path, monkeypatch):
+    for component in ("api", "web"):
+        (tmp_path / f"{component}.tar").touch()
+    env = {
+        "AZURE_SUBSCRIPTION_ID": "subscription",
+        "AZURE_RESOURCE_GROUP": "test",
+        "AZURE_CONTAINER_REGISTRY": "registry",
+        "COMMIT_SHA": "a" * 40,
+        "VITE_OIDC_AUTHORITY": "https://tenant.ciamlogin.com/tenant/v2.0",
+        "VITE_OIDC_CLIENT_ID": "client",
+        "VITE_OIDC_SCOPE": "openid api://api/play",
+    }
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(release, "registry_target", lambda _: "registry.azurecr.io")
+    calls = []
+    monkeypatch.setattr(
+        release,
+        "publish_images",
+        lambda *args: calls.append("publish") or {"api": "api-digest", "web": "web-digest"},
+    )
+    monkeypatch.setattr(release, "deploy", lambda *args: pytest.fail("Bootstrap must not deploy apps"))
+    monkeypatch.setattr(
+        release, "az", lambda *args, **kwargs: pytest.fail("Bootstrap must not provision resources")
+    )
+    monkeypatch.setattr("sys.argv", ["azure_deploy.py", "--images", str(tmp_path), "--publish-only"])
+    release.main()
+    assert calls == ["publish"]
+
+
+@pytest.fixture
+def azure_resources():
+    config = {
+        "AZURE_SUBSCRIPTION_ID": "subscription",
+        "AZURE_RESOURCE_GROUP": "test",
+        "AZURE_CONTAINER_REGISTRY": "registry",
+        "AZURE_WEB_APP": "web",
+        "AZURE_API_APP": "api",
+        "AZURE_WORKER_APP": "worker",
+        "AZURE_MIGRATION_JOB": "migration",
+        "authority_origin": "https://tenant.ciamlogin.com",
+    }
+    backend_env = [
+        {"name": "PASSIT_MODE", "value": "production"},
+        {"name": "PASSIT_ORIGIN", "value": "https://web.example"},
+        {"name": "PASSIT_DATABASE_URL", "secretRef": "database-url"},
+        {"name": "PASSIT_OIDC_ISSUER", "value": "https://tenant.ciamlogin.com/tenant/v2.0"},
+        {"name": "PASSIT_OIDC_AUDIENCE", "value": "api"},
+        {"name": "PASSIT_OIDC_JWKS_URL", "value": "https://tenant.ciamlogin.com/keys"},
+    ]
+    resources = {}
+    for name in ("api", "web", "worker", "migration"):
+        resources[name] = {
+            "properties": {
+                "environmentId": "/test/environment",
+                "configuration": {
+                    "activeRevisionsMode": "Single",
+                    "registries": [{"server": "registry.azurecr.io", "identity": "/test/pull-identity"}],
+                },
+                "template": {
+                    "containers": [{"name": name, "env": copy.deepcopy(backend_env)}],
+                    "scale": {"minReplicas": 1},
+                },
+            }
+        }
+    resources["api"]["properties"]["configuration"]["ingress"] = {
+        "external": False,
+        "targetPort": 8000,
+        "fqdn": "api.internal.example",
+    }
+    resources["web"]["properties"]["configuration"]["ingress"] = {
+        "external": True,
+        "targetPort": 8080,
+        "fqdn": "web.example",
+        "allowInsecure": False,
+    }
+    resources["web"]["properties"]["template"]["containers"][0]["env"] = [
+        {"name": "PASSIT_API_UPSTREAM", "value": "https://api.internal.example"},
+        {"name": "PASSIT_CONNECT_SOURCES", "value": "'self' https://tenant.ciamlogin.com"},
+    ]
+    resources["worker"]["properties"]["template"]["containers"][0]["command"] = [
+        "python",
+        "-m",
+        "passit.worker",
+    ]
+    resources["migration"]["properties"]["configuration"].update(
+        triggerType="Manual",
+        replicaRetryLimit=0,
+        manualTriggerConfig={"parallelism": 1, "replicaCompletionCount": 1},
+    )
+    resources["migration"]["properties"]["template"]["containers"][0]["command"] = [
+        "/bin/sh",
+        "-c",
+        release.MIGRATION,
+    ]
+    calls = []
+
+    def fake_az(*args, **kwargs):
+        calls.append(args)
+        if args[:2] == ("account", "show"):
+            return {"id": "subscription"}
+        if args[:2] == ("acr", "show"):
+            return {"loginServer": "registry.azurecr.io", "adminUserEnabled": False}
+        return resources[args[args.index("--name") + 1]]
+
+    return config, resources, calls, fake_az
+
+
+def test_preflight_reads_existing_resources_without_provisioning(azure_resources, monkeypatch):
+    config, _, calls, fake_az = azure_resources
+    monkeypatch.setattr(release, "az", fake_az)
+    server, _, _, origin = release.preflight(config)
+    assert server == "registry.azurecr.io" and origin == "https://web.example"
+    assert calls and all("show" in call for call in calls)
+
+
+@pytest.mark.parametrize("unsafe", ["public_api", "stopped_worker", "missing_signin_origin"])
+def test_unsafe_existing_configuration_is_rejected(azure_resources, monkeypatch, unsafe):
+    config, resources, _, fake_az = azure_resources
+    if unsafe == "public_api":
+        resources["api"]["properties"]["configuration"]["ingress"]["external"] = True
+    elif unsafe == "stopped_worker":
+        resources["worker"]["properties"]["template"]["scale"]["minReplicas"] = 0
+    else:
+        resources["web"]["properties"]["template"]["containers"][0]["env"][1]["value"] = "'self'"
+    monkeypatch.setattr(release, "az", fake_az)
+    with pytest.raises(release.DeploymentError):
+        release.preflight(config)
