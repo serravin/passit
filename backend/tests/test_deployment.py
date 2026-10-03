@@ -410,3 +410,75 @@ def test_publisher_refuses_to_overwrite_an_existing_version(tmp_path, monkeypatc
     )
     with pytest.raises(release.DeploymentError, match="already exists"):
         release.publish_images(config, tmp_path, "registry.azurecr.io")
+
+
+def test_deployment_updates_existing_apps_to_selected_digests(azure_resources, monkeypatch):
+    config, resources, _, _ = azure_resources
+    config.update(IMAGE_TYPE="release", IMAGE_TAG="release-" + "a" * 40 + "-123-1")
+    selected = {
+        component: "registry.azurecr.io/passit-" + component + "@sha256:" + "b" * 64
+        for component in ("api", "web")
+    }
+    events = []
+    monkeypatch.setattr(
+        release,
+        "preflight",
+        lambda _: (
+            "registry.azurecr.io",
+            {name: resources[name] for name in ("api", "web", "worker")},
+            resources["migration"],
+            "https://web.example",
+        ),
+    )
+    monkeypatch.setattr(release, "resolve_images", lambda *args: selected)
+    monkeypatch.setattr(release, "migrate", lambda config, image, job: events.append(("migrate", image)))
+    monkeypatch.setattr(release, "az", lambda *args, **kwargs: events.append(args))
+    monkeypatch.setattr(
+        release, "wait_revision", lambda config, kind, image: events.append(("healthy", kind, image))
+    )
+    monkeypatch.setattr(release, "smoke", lambda *args: events.append(("smoke",)))
+    monkeypatch.setattr(
+        release, "command", lambda *args, **kwargs: pytest.fail("Deployment must not build or push")
+    )
+    release.deploy(config)
+    assert events[0] == ("migrate", selected["api"])
+    updates = [event for event in events if event[:2] == ("containerapp", "update")]
+    assert len(updates) == 3
+    for call in updates:
+        name = call[call.index("--name") + 1]
+        assert call[call.index("--image") + 1] == selected["web" if name == "web" else "api"]
+    assert events[-1] == ("smoke",)
+    assert sum(event[0] == "healthy" for event in events) == 3
+
+
+def test_deployment_rejects_wrong_runtime_signin_configuration(monkeypatch):
+    responses = {
+        "/api/health": (200, b'{"status":"ok","mode":"production"}'),
+        "/healthz": (200, b"ok"),
+        "/api/config": (200, b'{"mode":"production"}'),
+        "/api/demo/accounts": (404, b"{}"),
+        "/api/me": (401, b"{}"),
+        "/auth/callback": (200, b'<div id="root">'),
+        "/runtime-config.json": (
+            200,
+            b'{"authority":"https://wrong.example","clientId":"wrong","scope":"openid"}',
+        ),
+    }
+    monkeypatch.setattr(
+        release,
+        "probe",
+        lambda url: (
+            *responses[url.removeprefix("https://web.example")],
+            {"Content-Security-Policy": "connect-src 'self' https://tenant.example"},
+        ),
+    )
+    with pytest.raises(release.DeploymentError, match="runtime sign-in settings"):
+        release.smoke(
+            "https://web.example",
+            "https://tenant.example",
+            {
+                "VITE_OIDC_AUTHORITY": "https://tenant.example",
+                "VITE_OIDC_CLIENT_ID": "client",
+                "VITE_OIDC_SCOPE": "openid api://api/play",
+            },
+        )

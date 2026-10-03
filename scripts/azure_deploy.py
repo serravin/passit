@@ -358,7 +358,7 @@ def probe(url):
         return response.code, response.read(), response.headers
 
 
-def smoke(origin, authority_origin):
+def smoke(origin, authority_origin, public_config=None):
     deadline = time.monotonic() + 300
     while time.monotonic() < deadline:
         try:
@@ -384,6 +384,17 @@ def smoke(origin, authority_origin):
     require(
         authority_origin in headers.get("Content-Security-Policy", ""), "Web CSP does not allow Entra sign-in"
     )
+    if public_config:
+        status, body, _ = probe(origin + "/runtime-config.json")
+        require(status == 200, "Web runtime configuration is unavailable")
+        expected = {
+            "authority": public_config["VITE_OIDC_AUTHORITY"],
+            "clientId": public_config["VITE_OIDC_CLIENT_ID"],
+            "scope": public_config["VITE_OIDC_SCOPE"],
+        }
+        require(
+            json.loads(body) == expected, "Web runtime sign-in settings do not match the selected environment"
+        )
 
 
 def wait_revision(config, kind, image):
@@ -430,9 +441,9 @@ def deploy(config):
             published["web" if kind == "web" else "api"],
         )
     print("Checking HTTPS, database readiness, callback routing and authentication...")
-    smoke(origin, config["authority_origin"])
     for kind in ("api", "worker", "web"):
         wait_revision(config, kind, published["web" if kind == "web" else "api"])
+    smoke(origin, config["authority_origin"], config)
     if path := os.getenv("GITHUB_OUTPUT"):
         with open(path, "a") as output:
             output.write(f"web_url={origin}\n")
