@@ -2,6 +2,7 @@
 
 import copy
 import importlib.util
+import re
 import subprocess
 from pathlib import Path
 
@@ -12,6 +13,13 @@ SPEC = importlib.util.spec_from_file_location(
 )
 release = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(release)
+
+
+@pytest.fixture(autouse=True)
+def isolate_github_command_files(tmp_path, monkeypatch):
+    # Mock publishing/deployment must never write to the real runner's command files.
+    for variable in ("GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY"):
+        monkeypatch.setenv(variable, str(tmp_path / variable.lower()))
 
 
 def test_missing_configuration_and_signin_scope_fail_before_deployment():
@@ -219,7 +227,8 @@ def test_publication_needs_only_registry_and_identifies_branch_type(branch, expe
         publish_only=True,
     )
     assert config["IMAGE_TYPE"] == expected_type
-    assert config["IMAGE_TAG"] == expected_type + "-" + "a" * 40 + "-123-2"
+    assert re.fullmatch(expected_type + r"-[0-9]{8}-aaaaaaa-r123-a2", config["IMAGE_TAG"])
+    release.validate_selection(expected_type, config["IMAGE_TAG"])
     assert "AZURE_WEB_APP" not in config
 
 
@@ -482,3 +491,11 @@ def test_deployment_rejects_wrong_runtime_signin_configuration(monkeypatch):
                 "VITE_OIDC_SCOPE": "openid api://api/play",
             },
         )
+
+
+@pytest.mark.parametrize("image_type", ["snapshot", "release"])
+def test_readable_tags_and_legacy_versions_are_both_selectable(image_type):
+    release.validate_selection(image_type, f"{image_type}-20261003-7917c60-r123-a1")
+    release.validate_selection(image_type, f"{image_type}-" + "a" * 40 + "-123-1")
+    with pytest.raises(release.DeploymentError):
+        release.validate_selection(image_type, f"{image_type}-20261003-7917c60-r123-a1\n")

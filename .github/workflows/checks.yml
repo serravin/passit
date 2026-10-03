@@ -36,7 +36,7 @@ jobs:
       - run: .venv/bin/ruff format --check backend scripts
       - run: npm --prefix frontend run lint
       - run: npm --prefix frontend run format:check
-      - run: bash -n scripts/dev.sh scripts/install.sh && sh -n docker/start-web.sh
+      - run: bash -n scripts/*.sh && sh -n docker/start-web.sh
 
   tests:
     name: Application and browser tests
@@ -135,29 +135,16 @@ jobs:
           context: .
           file: docker/${{ matrix.component }}.Dockerfile
           tags: passit-${{ matrix.component }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           load: true
           pull: true
       - name: Check web startup with a read-only filesystem
         if: matrix.component == 'web'
         env:
           COMMIT_SHA: ${{ github.sha }}
-        run: |
-          docker run --detach --name web-smoke --publish 127.0.0.1:8080:8080 \
-            --read-only --tmpfs /tmp:size=32m,mode=1777 --cap-drop ALL \
-            --security-opt no-new-privileges:true \
-            --env VITE_OIDC_AUTHORITY=https://tenant.example.test/tenant/v2.0 \
-            --env VITE_OIDC_CLIENT_ID=smoke-client \
-            --env "VITE_OIDC_SCOPE=openid api://smoke/play" \
-            --env PASSIT_API_UPSTREAM=http://127.0.0.1:8000 \
-            --env "PASSIT_CONNECT_SOURCES='self' https://tenant.example.test" \
-            "passit-web:$COMMIT_SHA"
-          trap 'docker rm -f web-smoke >/dev/null 2>&1 || true' EXIT
-          curl --fail --silent --show-error --retry 15 --retry-connrefused \
-            --retry-delay 1 --max-time 5 http://127.0.0.1:8080/healthz
-          curl --fail --silent http://127.0.0.1:8080/auth/callback \
-            | python -c 'import sys; assert "<div id=\"root\">" in sys.stdin.read()'
-          curl --fail --silent http://127.0.0.1:8080/runtime-config.json \
-            | python -c 'import json,sys; c=json.load(sys.stdin); assert c["clientId"] == "smoke-client" and c["scope"] == "openid api://smoke/play"'
+        run: bash scripts/web_smoke.sh "passit-web:$COMMIT_SHA"
       - name: Save the built image
         env:
           COMPONENT: ${{ matrix.component }}

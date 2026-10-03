@@ -10,8 +10,8 @@ COPY frontend ./
 RUN npm run build
 
 FROM ${NGINX_IMAGE} AS runtime
-COPY docker/nginx.conf /etc/nginx/passit.conf.template
-COPY docker/start-web.sh /usr/local/bin/passit-web
+COPY --chmod=0644 docker/nginx.conf /etc/nginx/passit.conf.template
+COPY --chmod=0755 docker/start-web.sh /usr/local/bin/passit-web
 COPY --from=build /app/dist /usr/share/nginx/html
 USER 101:101
 EXPOSE 8080

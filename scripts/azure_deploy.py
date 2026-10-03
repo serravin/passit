@@ -11,6 +11,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -60,7 +61,8 @@ def settings(environ, publish_only=False):
             require(re.fullmatch(r"[1-9][0-9]*", values[name]), f"{name} must be a positive number")
         values["IMAGE_TYPE"] = "release" if values["SOURCE_BRANCH"] == "main" else "snapshot"
         values["IMAGE_TAG"] = (
-            f"{values['IMAGE_TYPE']}-{values['COMMIT_SHA']}-{values['BUILD_NUMBER']}-{values['BUILD_ATTEMPT']}"
+            f"{values['IMAGE_TYPE']}-{datetime.now(UTC):%Y%m%d}-{values['COMMIT_SHA'][:7]}"
+            f"-r{values['BUILD_NUMBER']}-a{values['BUILD_ATTEMPT']}"
         )
         return values
     values["IMAGE_TYPE"] = environ.get("IMAGE_TYPE", "")
@@ -230,7 +232,11 @@ def preflight(config):
 def validate_selection(image_type, tag):
     require(image_type in {"snapshot", "release"}, "Choose snapshot or release")
     require(
-        re.fullmatch(rf"{image_type}-[0-9a-f]{{40}}-[1-9][0-9]*-[1-9][0-9]*", tag),
+        re.fullmatch(
+            rf"{image_type}-(?:[0-9]{{8}}-[0-9a-f]{{7}}-r[1-9][0-9]*-a[1-9][0-9]*"
+            rf"|[0-9a-f]{{40}}-[1-9][0-9]*-[1-9][0-9]*)",
+            tag,
+        ),
         "Select a complete published tag matching the chosen image type",
     )
 

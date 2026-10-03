@@ -52,8 +52,10 @@ A branch push publishes the same version for API and web:
 
 | Source | Image tag |
 |---|---|
-| Feature/other non-main branch | `snapshot-FULL_COMMIT_SHA-RUN_ID-ATTEMPT` |
-| `main` (including a merged PR) | `release-FULL_COMMIT_SHA-RUN_ID-ATTEMPT` |
+| Feature/other non-main branch | `snapshot-YYYYMMDD-SHORT_SHA-rRUN_ID-aATTEMPT` |
+| `main` (including a merged PR) | `release-YYYYMMDD-SHORT_SHA-rRUN_ID-aATTEMPT` |
+
+For example, `release-20261003-7917c60-r123-a1` includes the UTC build date, seven-character commit, workflow run ID and attempt. The full source commit is also recorded in the image labels. Older full-commit tags remain selectable.
 
 The complete references are `YOUR_REGISTRY.azurecr.io/passit-api:TAG` and `YOUR_REGISTRY.azurecr.io/passit-web:TAG`. The API image also runs the worker and migration job. There is no mutable `latest` tag. Publication refuses an existing version and locks both tags against overwrite/deletion after both pushes succeed. A failed partial publication cannot be deployed. Rerunning a build produces a different attempt tag.
 
@@ -174,4 +176,4 @@ No deployment starts merely from a branch push or merge. The old `AZURE_TEST_DEP
 
 ## Validation limits in the coding environment
 
-Workflow syntax, linting, application/deployment tests, the client build and native Nginx routing were checked locally. Docker Hub rate-limited the container build, and the network policy blocked Trivy's vulnerability-database registry. An offline Trivy secrets/configuration scan passed; full dependency/image scans remain required on GitHub and are not bypassed. No Azure resources were created or deployed from this coding environment.
+Workflow syntax, linting, application/deployment tests, the client build and native Nginx routing were checked locally. The Docker web image builds and passes the same read-only container smoke check used in CI. That check waits through transient connection resets, rejects exited containers, and preserves container state/logs on failure. An offline Trivy secrets/configuration scan passed; full dependency/image scans remain required on GitHub. The cloud network policy blocked Trivy's vulnerability-database registry during earlier validation. No Azure resources were created or deployed from this coding environment.
