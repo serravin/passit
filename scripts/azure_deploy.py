@@ -1,4 +1,4 @@
-"""Release scanned images into existing Azure Container Apps test resources.
+"""Publish scanned images or deploy an existing image pair to Azure Container Apps.
 
 This script creates no infrastructure and never reads Azure secret values.
 """
@@ -26,7 +26,6 @@ REQUIRED = (
     "VITE_OIDC_AUTHORITY",
     "VITE_OIDC_CLIENT_ID",
     "VITE_OIDC_SCOPE",
-    "COMMIT_SHA",
 )
 
 
@@ -40,12 +39,33 @@ def require(condition, message):
 
 
 def settings(environ, publish_only=False):
-    resource_names = {"AZURE_WEB_APP", "AZURE_API_APP", "AZURE_WORKER_APP", "AZURE_MIGRATION_JOB"}
-    required = [name for name in REQUIRED if not publish_only or name not in resource_names]
+    required = (
+        list(REQUIRED)
+        if not publish_only
+        else [
+            "AZURE_SUBSCRIPTION_ID",
+            "AZURE_CONTAINER_REGISTRY",
+            "COMMIT_SHA",
+            "BUILD_NUMBER",
+            "BUILD_ATTEMPT",
+            "SOURCE_BRANCH",
+        ]
+    )
     missing = [name for name in required if not environ.get(name, "").strip()]
     require(not missing, "Configure these GitHub variables: " + ", ".join(missing))
     values = {name: environ[name].strip() for name in required}
-    require(re.fullmatch(r"[0-9a-f]{40}", values["COMMIT_SHA"]), "COMMIT_SHA must identify a full commit")
+    if publish_only:
+        require(re.fullmatch(r"[0-9a-f]{40}", values["COMMIT_SHA"]), "COMMIT_SHA must identify a full commit")
+        for name in ("BUILD_NUMBER", "BUILD_ATTEMPT"):
+            require(re.fullmatch(r"[1-9][0-9]*", values[name]), f"{name} must be a positive number")
+        values["IMAGE_TYPE"] = "release" if values["SOURCE_BRANCH"] == "main" else "snapshot"
+        values["IMAGE_TAG"] = (
+            f"{values['IMAGE_TYPE']}-{values['COMMIT_SHA']}-{values['BUILD_NUMBER']}-{values['BUILD_ATTEMPT']}"
+        )
+        return values
+    values["IMAGE_TYPE"] = environ.get("IMAGE_TYPE", "")
+    values["IMAGE_TAG"] = environ.get("IMAGE_TAG", "")
+    validate_selection(values["IMAGE_TYPE"], values["IMAGE_TAG"])
     authority = urlsplit(values["VITE_OIDC_AUTHORITY"])
     require(
         authority.scheme == "https"
@@ -113,10 +133,9 @@ def backend_config(item, label, origin):
 
 
 def registry_target(config):
-    group = config["AZURE_RESOURCE_GROUP"]
     account = az("account", "show")
     require(account["id"] == config["AZURE_SUBSCRIPTION_ID"], "Azure login uses the wrong subscription")
-    registry = az("acr", "show", "--name", config["AZURE_CONTAINER_REGISTRY"], "--resource-group", group)
+    registry = az("acr", "show", "--name", config["AZURE_CONTAINER_REGISTRY"])
     require(
         not registry.get("adminUserEnabled"), "Disable the registry admin account and use managed identity"
     )
@@ -146,7 +165,8 @@ def preflight(config):
         )
         container(resource, label)
     require(
-        len(environments) == 1 and "" not in environments, "All services must use the same test environment"
+        len(environments) == 1 and "" not in environments,
+        "All services must use the same Container Apps environment",
     )
     for label, app in apps.items():
         require(
@@ -184,6 +204,8 @@ def preflight(config):
         web_env.get("PASSIT_API_UPSTREAM", "").rstrip("/") == "https://" + api_ingress["fqdn"],
         "Web PASSIT_API_UPSTREAM must be the internal API HTTPS URL",
     )
+    for name in ("VITE_OIDC_AUTHORITY", "VITE_OIDC_CLIENT_ID", "VITE_OIDC_SCOPE"):
+        require(web_env.get(name) == config[name], f"Web {name} must match the selected GitHub Environment")
     sources = web_env.get("PASSIT_CONNECT_SOURCES", "").split()
     require(
         "'self'" in sources and config["authority_origin"] in sources,
@@ -205,25 +227,79 @@ def preflight(config):
     return server, apps, job, origin
 
 
+def validate_selection(image_type, tag):
+    require(image_type in {"snapshot", "release"}, "Choose snapshot or release")
+    require(
+        re.fullmatch(rf"{image_type}-[0-9a-f]{{40}}-[1-9][0-9]*-[1-9][0-9]*", tag),
+        "Select a complete published tag matching the chosen image type",
+    )
+
+
+def resolve_images(config, server):
+    validate_selection(config["IMAGE_TYPE"], config["IMAGE_TAG"])
+    images = {}
+    for component in ("api", "web"):
+        metadata = az(
+            "acr",
+            "repository",
+            "show",
+            "--name",
+            config["AZURE_CONTAINER_REGISTRY"],
+            "--image",
+            f"passit-{component}:{config['IMAGE_TAG']}",
+        )
+        digest = metadata.get("digest", "")
+        require(re.fullmatch(r"sha256:[0-9a-f]{64}", digest), f"Invalid {component} registry digest")
+        require(
+            metadata.get("changeableAttributes", {}).get("writeEnabled") is False,
+            f"The {component} tag is not locked; select a completed publication",
+        )
+        images[component] = f"{server}/passit-{component}@{digest}"
+    return images
+
+
 def publish_images(config, images, server):
-    az("acr", "login", "--name", config["AZURE_CONTAINER_REGISTRY"], json_output=False)
-    published = {}
+    for component in ("api", "web"):
+        require((images / f"{component}.tar").is_file(), f"The scanned {component} image artifact is missing")
+    registry = config["AZURE_CONTAINER_REGISTRY"]
+    repositories = az("acr", "repository", "list", "--name", registry)
+    for component in ("api", "web"):
+        repo = f"passit-{component}"
+        if repo in repositories:
+            tags = az("acr", "repository", "show-tags", "--name", registry, "--repository", repo)
+            require(
+                config["IMAGE_TAG"] not in tags, "This build tag already exists; rerun with a new attempt"
+            )
+    az("acr", "login", "--name", registry, json_output=False)
     for component in ("api", "web"):
         local = f"passit-{component}:{config['COMMIT_SHA']}"
-        remote = f"{server}/{local}"
+        remote = f"{server}/passit-{component}:{config['IMAGE_TAG']}"
         command("docker", "load", "--input", str(images / f"{component}.tar"))
         command("docker", "tag", local, remote)
         command("docker", "push", remote)
-        digests = command(
-            "docker", "image", "inspect", remote, "--format", "{{json .RepoDigests}}", json_output=True
+    # Lock both only after both pushes succeed. Deployment rejects incomplete publications.
+    for component in ("api", "web"):
+        az(
+            "acr",
+            "repository",
+            "update",
+            "--name",
+            registry,
+            "--image",
+            f"passit-{component}:{config['IMAGE_TAG']}",
+            "--write-enabled",
+            "false",
+            "--delete-enabled",
+            "false",
         )
-        prefix = f"{server}/passit-{component}@"
-        matching = [ref for ref in digests if ref.startswith(prefix)]
-        require(
-            len(matching) == 1 and re.fullmatch(r"sha256:[0-9a-f]{64}", matching[0].removeprefix(prefix)),
-            f"Cannot determine the pushed {component} image digest",
-        )
-        published[component] = matching[0]
+    published = resolve_images(config, server)
+    summary = f"Image type: `{config['IMAGE_TYPE']}`\n\nImage tag: `{config['IMAGE_TAG']}`\n\n"
+    for component, image in published.items():
+        summary += f"- {component}: `{image}`\n"
+    print(summary)
+    if path := os.getenv("GITHUB_STEP_SUMMARY"):
+        with open(path, "a") as output:
+            output.write(summary)
     return published
 
 
@@ -332,14 +408,12 @@ def wait_revision(config, kind, image):
     raise DeploymentError(f"The new {kind} image did not become an active, healthy revision")
 
 
-def deploy(config, images):
-    for component in ("api", "web"):
-        require((images / f"{component}.tar").is_file(), f"The scanned {component} image artifact is missing")
-    print("Checking the existing Azure test resources...")
+def deploy(config):
+    print("Checking the existing Azure resources...")
     server, apps, job, origin = preflight(config)
-    print("Publishing the scanned images...")
-    published = publish_images(config, images, server)
-    print("Running the database migration in the test environment...")
+    print("Resolving the selected, locked image pair...")
+    published = resolve_images(config, server)
+    print("Running the database migration in the selected environment...")
     migrate(config, published["api"], job)
     for kind in ("api", "worker", "web"):
         print(f"Updating the {kind} image...")
@@ -364,40 +438,23 @@ def deploy(config, images):
             output.write(f"web_url={origin}\n")
     if path := os.getenv("GITHUB_STEP_SUMMARY"):
         with open(path, "a") as summary:
-            summary.write(
-                f"Azure test deployment: [{origin}]({origin})\n\nCommit: `{config['COMMIT_SHA']}`\n"
-            )
-    print(f"Azure test deployment checked: {origin}")
+            summary.write(f"Azure deployment: [{origin}]({origin})\n\nImage tag: `{config['IMAGE_TAG']}`\n")
+    print(f"Azure deployment checked: {origin}")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--images", type=Path, required=True)
-    parser.add_argument(
-        "--publish-only", action="store_true", help="Publish scanned images for manual initial setup"
-    )
+    subcommands = parser.add_subparsers(dest="action", required=True)
+    publish = subcommands.add_parser("publish", help="Publish scanned build artifacts, without deploying")
+    publish.add_argument("--images", type=Path, required=True)
+    subcommands.add_parser("deploy", help="Deploy the selected existing registry images")
     args = parser.parse_args()
     try:
-        config = settings(os.environ, publish_only=args.publish_only)
-        if args.publish_only:
-            for component in ("api", "web"):
-                require(
-                    (args.images / f"{component}.tar").is_file(), f"The scanned {component} image is missing"
-                )
-            server = registry_target(config)
-            images = publish_images(config, args.images, server)
-            print(
-                "Scanned images published. Create the test apps and migration job manually using these images:"
-            )
-            for image in images.values():
-                print(image)
-            if path := os.getenv("GITHUB_STEP_SUMMARY"):
-                with open(path, "a") as summary:
-                    summary.write("Scanned test images published for manual setup:\n\n")
-                    for component, image in images.items():
-                        summary.write(f"- {component}: `{image}`\n")
+        config = settings(os.environ, publish_only=args.action == "publish")
+        if args.action == "publish":
+            publish_images(config, args.images, registry_target(config))
         else:
-            deploy(config, args.images)
+            deploy(config)
     except (DeploymentError, KeyError, ValueError, OSError) as exc:
         # Generic parse/network errors must not disclose Azure response bodies or credentials.
         message = str(exc) if isinstance(exc, DeploymentError) else type(exc).__name__

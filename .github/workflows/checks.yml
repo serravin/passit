@@ -1,21 +1,16 @@
-name: Checks and Azure test deployment
+name: Build and publish images
 
 on:
   push:
   pull_request:
   workflow_dispatch:
-    inputs:
-      publish_images_only:
-        description: Publish scanned images to your existing registry for first-time manual setup
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 concurrency:
   group: passit-${{ github.workflow }}-${{ github.ref }}
-  # Never interrupt a main release midway through a database migration.
+  # Let main publications complete; newer feature pushes can replace pending snapshots.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
@@ -37,14 +32,15 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: uv sync --frozen --extra dev --python 3.12
       - run: npm --prefix frontend ci --ignore-scripts
-      - run: .venv/bin/ruff check backend scripts/azure_deploy.py
-      - run: .venv/bin/ruff format --check backend scripts/azure_deploy.py
+      - run: .venv/bin/ruff check backend scripts
+      - run: .venv/bin/ruff format --check backend scripts
       - run: npm --prefix frontend run lint
       - run: npm --prefix frontend run format:check
       - run: bash -n scripts/dev.sh scripts/install.sh && sh -n docker/start-web.sh
 
   tests:
     name: Application and browser tests
+    needs: lint
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -103,6 +99,7 @@ jobs:
 
   security:
     name: Trivy source scan
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -122,8 +119,9 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-  containers:
-    name: Build and scan ${{ matrix.component }} image
+  image-build:
+    name: Build ${{ matrix.component }} image
+    needs: security
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -139,11 +137,6 @@ jobs:
           tags: passit-${{ matrix.component }}:${{ github.sha }}
           load: true
           pull: true
-          # Public SPA settings live in repository variables, never VITE_* secrets.
-          build-args: |
-            VITE_OIDC_AUTHORITY=${{ vars.VITE_OIDC_AUTHORITY }}
-            VITE_OIDC_CLIENT_ID=${{ vars.VITE_OIDC_CLIENT_ID }}
-            VITE_OIDC_SCOPE=${{ vars.VITE_OIDC_SCOPE }}
       - name: Check web startup with a read-only filesystem
         if: matrix.component == 'web'
         env:
@@ -152,6 +145,9 @@ jobs:
           docker run --detach --name web-smoke --publish 127.0.0.1:8080:8080 \
             --read-only --tmpfs /tmp:size=32m,mode=1777 --cap-drop ALL \
             --security-opt no-new-privileges:true \
+            --env VITE_OIDC_AUTHORITY=https://tenant.example.test/tenant/v2.0 \
+            --env VITE_OIDC_CLIENT_ID=smoke-client \
+            --env "VITE_OIDC_SCOPE=openid api://smoke/play" \
             --env PASSIT_API_UPSTREAM=http://127.0.0.1:8000 \
             --env "PASSIT_CONNECT_SOURCES='self' https://tenant.example.test" \
             "passit-web:$COMMIT_SHA"
@@ -160,6 +156,35 @@ jobs:
             --retry-delay 1 --max-time 5 http://127.0.0.1:8080/healthz
           curl --fail --silent http://127.0.0.1:8080/auth/callback \
             | python -c 'import sys; assert "<div id=\"root\">" in sys.stdin.read()'
+          curl --fail --silent http://127.0.0.1:8080/runtime-config.json \
+            | python -c 'import json,sys; c=json.load(sys.stdin); assert c["clientId"] == "smoke-client" and c["scope"] == "openid api://smoke/play"'
+      - name: Save the built image
+        env:
+          COMPONENT: ${{ matrix.component }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: docker save "passit-$COMPONENT:$COMMIT_SHA" -o "$COMPONENT.tar"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-${{ matrix.component }}
+          path: ${{ matrix.component }}.tar
+          retention-days: 1
+
+  image-scan:
+    name: Scan ${{ matrix.component }} image
+    needs: image-build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [api, web]
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: image-${{ matrix.component }}
+      - name: Load the exact built image
+        env:
+          COMPONENT: ${{ matrix.component }}
+        run: docker load --input "$COMPONENT.tar"
       - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with:
           version: v${{ env.TRIVY_VERSION }}
@@ -178,32 +203,13 @@ jobs:
           path: trivy-${{ matrix.component }}.json
           if-no-files-found: warn
           retention-days: 7
-      - name: Save the scanned image
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        env:
-          COMPONENT: ${{ matrix.component }}
-          COMMIT_SHA: ${{ github.sha }}
-        run: docker save "passit-$COMPONENT:$COMMIT_SHA" -o "$COMPONENT.tar"
-      - name: Pass the scanned image to deployment
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: image-${{ matrix.component }}
-          path: ${{ matrix.component }}.tar
-          retention-days: 1
 
-  deploy-test:
-    name: ${{ inputs.publish_images_only && 'Publish test images only' || 'Deploy to existing Azure test environment' }}
-    needs: [lint, tests, security, containers]
-    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && (vars.AZURE_TEST_DEPLOY_ENABLED == 'true' || (github.event_name == 'workflow_dispatch' && inputs.publish_images_only))
+  registry-push:
+    name: Publish snapshot or release to ACR
+    needs: image-scan
+    if: github.event_name != 'pull_request' && github.ref_type == 'branch'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-    environment:
-      name: ${{ vars.AZURE_TEST_ENVIRONMENT || 'test' }}
-      url: ${{ steps.deploy.outputs.web_url }}
-    concurrency:
-      group: azure-${{ vars.AZURE_TEST_ENVIRONMENT || 'test' }}
-      cancel-in-progress: false
+    environment: ${{ vars.AZURE_REGISTRY_ENVIRONMENT || 'registry' }}
     permissions:
       contents: read
       id-token: write
@@ -219,26 +225,12 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Prepare Container Apps CLI
-        run: az extension add --name containerapp --upgrade --only-show-errors
-      - name: Deploy scanned images and check the app
-        id: deploy
+      - name: Push and lock the scanned image pair
         env:
           AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
           AZURE_CONTAINER_REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY }}
-          AZURE_WEB_APP: ${{ vars.AZURE_WEB_APP }}
-          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
-          AZURE_WORKER_APP: ${{ vars.AZURE_WORKER_APP }}
-          AZURE_MIGRATION_JOB: ${{ vars.AZURE_MIGRATION_JOB }}
-          VITE_OIDC_AUTHORITY: ${{ vars.VITE_OIDC_AUTHORITY }}
-          VITE_OIDC_CLIENT_ID: ${{ vars.VITE_OIDC_CLIENT_ID }}
-          VITE_OIDC_SCOPE: ${{ vars.VITE_OIDC_SCOPE }}
           COMMIT_SHA: ${{ github.sha }}
-          PUBLISH_IMAGES_ONLY: ${{ inputs.publish_images_only || false }}
-        run: |
-          if [ "$PUBLISH_IMAGES_ONLY" = true ]; then
-            python scripts/azure_deploy.py --images images --publish-only
-          else
-            python scripts/azure_deploy.py --images images
-          fi
+          BUILD_NUMBER: ${{ github.run_id }}
+          BUILD_ATTEMPT: ${{ github.run_attempt }}
+          SOURCE_BRANCH: ${{ github.ref_name }}
+        run: python scripts/azure_deploy.py publish --images images

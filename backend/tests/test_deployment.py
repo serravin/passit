@@ -18,7 +18,12 @@ def test_missing_configuration_and_signin_scope_fail_before_deployment():
     with pytest.raises(release.DeploymentError, match="GitHub variables"):
         release.settings({})
     values = dict.fromkeys(release.REQUIRED, "configured")
-    values.update(COMMIT_SHA="a" * 40, VITE_OIDC_AUTHORITY="https://tenant.ciamlogin.com/tenant/v2.0")
+    values.update(
+        IMAGE_TYPE="snapshot",
+        IMAGE_TAG="snapshot-" + "a" * 40 + "-1-1",
+        COMMIT_SHA="a" * 40,
+        VITE_OIDC_AUTHORITY="https://tenant.ciamlogin.com/tenant/v2.0",
+    )
     with pytest.raises(release.DeploymentError, match="API scope"):
         release.settings({**values, "VITE_OIDC_SCOPE": "openid profile"})
     with pytest.raises(release.DeploymentError, match="distinct"):
@@ -32,7 +37,7 @@ def test_migration_failure_leaves_application_images_untouched(tmp_path, monkeyp
     job = {"properties": {"template": {"containers": [{"name": "migration"}]}}}
     monkeypatch.setattr(release, "preflight", lambda _: ("registry", {}, job, "https://test.example"))
     monkeypatch.setattr(
-        release, "publish_images", lambda *args: {"api": "api@sha256:scanned", "web": "web@sha256:scanned"}
+        release, "resolve_images", lambda *args: {"api": "api@sha256:scanned", "web": "web@sha256:scanned"}
     )
     calls = []
 
@@ -48,7 +53,7 @@ def test_migration_failure_leaves_application_images_untouched(tmp_path, monkeyp
 
     monkeypatch.setattr(release, "az", fake_az)
     with pytest.raises(release.DeploymentError, match="Migration failed"):
-        release.deploy(config, tmp_path)
+        release.deploy(config)
     assert not any(call[:2] == ("containerapp", "update") for call in calls)
 
 
@@ -113,26 +118,79 @@ def test_cli_errors_do_not_leak_response_environment_values(monkeypatch, capsys)
     assert "PRIVATE_SECRET" not in capsys.readouterr().out
 
 
-def test_docker_registry_digest_is_pinned_for_all_deployments(tmp_path, monkeypatch):
-    commands = []
+def test_selected_images_are_pinned_without_pulling_or_pushing(monkeypatch):
+    calls = []
     digest = "sha256:" + "a" * 64
 
-    def fake_command(*args, **kwargs):
-        commands.append(args)
-        if args[:3] == ("docker", "image", "inspect"):
-            image = args[3].split(":")[0]
-            return [image + "@" + digest]
-        return ""
+    def fake_az(*args, **kwargs):
+        calls.append(args)
+        return {"digest": digest, "changeableAttributes": {"writeEnabled": False}}
 
-    monkeypatch.setattr(release, "az", lambda *args, **kwargs: "")
-    monkeypatch.setattr(release, "command", fake_command)
-    result = release.publish_images(
-        {"COMMIT_SHA": "b" * 40, "AZURE_CONTAINER_REGISTRY": "registry"}, tmp_path, "registry.azurecr.io"
+    monkeypatch.setattr(release, "az", fake_az)
+    monkeypatch.setattr(
+        release, "command", lambda *args, **kwargs: pytest.fail("Deployment must not use Docker")
+    )
+    result = release.resolve_images(
+        {
+            "IMAGE_TYPE": "snapshot",
+            "IMAGE_TAG": "snapshot-" + "b" * 40 + "-123-1",
+            "AZURE_CONTAINER_REGISTRY": "registry",
+        },
+        "registry.azurecr.io",
     )
     assert result == {
         component: f"registry.azurecr.io/passit-{component}@{digest}" for component in ("api", "web")
     }
-    assert sum(call[:2] == ("docker", "push") for call in commands) == 2
+    assert len(calls) == 2 and all(call[:3] == ("acr", "repository", "show") for call in calls)
+
+
+@pytest.mark.parametrize(
+    "tag", ["latest", "release-" + "a" * 40 + "-1-1", "snapshot-$(evil)", "snapshot-" + "a" * 40 + "-1-1\n"]
+)
+def test_wrong_type_or_malformed_image_selection_is_rejected(tag):
+    with pytest.raises(release.DeploymentError, match="complete published tag"):
+        release.validate_selection("snapshot", tag)
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"digest": "sha256:" + "a" * 64, "changeableAttributes": {"writeEnabled": True}},
+        {"digest": "invalid", "changeableAttributes": {"writeEnabled": False}},
+    ],
+)
+def test_unfinished_or_invalid_publication_prevents_migration(metadata, monkeypatch):
+    monkeypatch.setattr(release, "preflight", lambda _: ("registry", {}, {}, "https://test.example"))
+    monkeypatch.setattr(release, "az", lambda *args, **kwargs: metadata)
+    monkeypatch.setattr(release, "migrate", lambda *args: pytest.fail("Must reject before migration"))
+    with pytest.raises(release.DeploymentError):
+        release.deploy(
+            {
+                "IMAGE_TYPE": "release",
+                "IMAGE_TAG": "release-" + "a" * 40 + "-1-1",
+                "AZURE_CONTAINER_REGISTRY": "registry",
+            }
+        )
+
+
+def test_missing_second_image_prevents_migration(monkeypatch):
+    monkeypatch.setattr(release, "preflight", lambda _: ("registry", {}, {}, "https://test.example"))
+
+    def fake_az(*args, **kwargs):
+        if args[-1].startswith("passit-web:"):
+            raise release.DeploymentError("Selected web image does not exist")
+        return {"digest": "sha256:" + "a" * 64, "changeableAttributes": {"writeEnabled": False}}
+
+    monkeypatch.setattr(release, "az", fake_az)
+    monkeypatch.setattr(release, "migrate", lambda *args: pytest.fail("Must resolve both before migration"))
+    with pytest.raises(release.DeploymentError, match="does not exist"):
+        release.deploy(
+            {
+                "IMAGE_TYPE": "snapshot",
+                "IMAGE_TAG": "snapshot-" + "a" * 40 + "-1-1",
+                "AZURE_CONTAINER_REGISTRY": "registry",
+            }
+        )
 
 
 def test_plaintext_database_credentials_are_rejected():
@@ -147,34 +205,53 @@ def test_plaintext_database_credentials_are_rejected():
         release.backend_config(item, "api", "https://web.example")
 
 
-def test_bootstrap_can_publish_without_creating_or_requiring_app_resources(tmp_path, monkeypatch):
+@pytest.mark.parametrize("branch, expected_type", [("main", "release"), ("feature/new-ui", "snapshot")])
+def test_publication_needs_only_registry_and_identifies_branch_type(branch, expected_type):
+    config = release.settings(
+        {
+            "AZURE_SUBSCRIPTION_ID": "subscription",
+            "AZURE_CONTAINER_REGISTRY": "registry",
+            "COMMIT_SHA": "a" * 40,
+            "BUILD_NUMBER": "123",
+            "BUILD_ATTEMPT": "2",
+            "SOURCE_BRANCH": branch,
+        },
+        publish_only=True,
+    )
+    assert config["IMAGE_TYPE"] == expected_type
+    assert config["IMAGE_TAG"] == expected_type + "-" + "a" * 40 + "-123-2"
+    assert "AZURE_WEB_APP" not in config
+
+
+def test_second_push_failure_does_not_mark_a_pair_ready(tmp_path, monkeypatch):
     for component in ("api", "web"):
         (tmp_path / f"{component}.tar").touch()
-    env = {
-        "AZURE_SUBSCRIPTION_ID": "subscription",
-        "AZURE_RESOURCE_GROUP": "test",
-        "AZURE_CONTAINER_REGISTRY": "registry",
-        "COMMIT_SHA": "a" * 40,
-        "VITE_OIDC_AUTHORITY": "https://tenant.ciamlogin.com/tenant/v2.0",
-        "VITE_OIDC_CLIENT_ID": "client",
-        "VITE_OIDC_SCOPE": "openid api://api/play",
-    }
-    for name, value in env.items():
-        monkeypatch.setenv(name, value)
-    monkeypatch.setattr(release, "registry_target", lambda _: "registry.azurecr.io")
+    config = release.settings(
+        {
+            "AZURE_SUBSCRIPTION_ID": "subscription",
+            "AZURE_CONTAINER_REGISTRY": "registry",
+            "COMMIT_SHA": "a" * 40,
+            "BUILD_NUMBER": "123",
+            "BUILD_ATTEMPT": "1",
+            "SOURCE_BRANCH": "main",
+        },
+        publish_only=True,
+    )
     calls = []
-    monkeypatch.setattr(
-        release,
-        "publish_images",
-        lambda *args: calls.append("publish") or {"api": "api-digest", "web": "web-digest"},
-    )
-    monkeypatch.setattr(release, "deploy", lambda *args: pytest.fail("Bootstrap must not deploy apps"))
-    monkeypatch.setattr(
-        release, "az", lambda *args, **kwargs: pytest.fail("Bootstrap must not provision resources")
-    )
-    monkeypatch.setattr("sys.argv", ["azure_deploy.py", "--images", str(tmp_path), "--publish-only"])
-    release.main()
-    assert calls == ["publish"]
+
+    def fake_az(*args, **kwargs):
+        calls.append(args)
+        return []
+
+    def fake_command(*args, **kwargs):
+        if args[:2] == ("docker", "push") and "passit-web:" in args[2]:
+            raise release.DeploymentError("Web push failed")
+
+    monkeypatch.setattr(release, "az", fake_az)
+    monkeypatch.setattr(release, "command", fake_command)
+    with pytest.raises(release.DeploymentError):
+        release.publish_images(config, tmp_path, "registry.azurecr.io")
+    assert not any(call[:3] == ("acr", "repository", "update") for call in calls)
 
 
 @pytest.fixture
@@ -188,6 +265,9 @@ def azure_resources():
         "AZURE_WORKER_APP": "worker",
         "AZURE_MIGRATION_JOB": "migration",
         "authority_origin": "https://tenant.ciamlogin.com",
+        "VITE_OIDC_AUTHORITY": "https://tenant.ciamlogin.com/tenant/v2.0",
+        "VITE_OIDC_CLIENT_ID": "spa-client",
+        "VITE_OIDC_SCOPE": "openid api://api/play",
     }
     backend_env = [
         {"name": "PASSIT_MODE", "value": "production"},
@@ -227,6 +307,10 @@ def azure_resources():
         {"name": "PASSIT_API_UPSTREAM", "value": "https://api.internal.example"},
         {"name": "PASSIT_CONNECT_SOURCES", "value": "'self' https://tenant.ciamlogin.com"},
     ]
+    resources["web"]["properties"]["template"]["containers"][0]["env"].extend(
+        {"name": name, "value": config[name]}
+        for name in ("VITE_OIDC_AUTHORITY", "VITE_OIDC_CLIENT_ID", "VITE_OIDC_SCOPE")
+    )
     resources["worker"]["properties"]["template"]["containers"][0]["command"] = [
         "python",
         "-m",
@@ -275,3 +359,54 @@ def test_unsafe_existing_configuration_is_rejected(azure_resources, monkeypatch,
     monkeypatch.setattr(release, "az", fake_az)
     with pytest.raises(release.DeploymentError):
         release.preflight(config)
+
+
+def test_successful_publish_locks_both_versions_after_pushes(tmp_path, monkeypatch):
+    for component in ("api", "web"):
+        (tmp_path / f"{component}.tar").touch()
+    config = release.settings(
+        {
+            "AZURE_SUBSCRIPTION_ID": "sub",
+            "AZURE_CONTAINER_REGISTRY": "registry",
+            "COMMIT_SHA": "a" * 40,
+            "BUILD_NUMBER": "123",
+            "BUILD_ATTEMPT": "1",
+            "SOURCE_BRANCH": "main",
+        },
+        publish_only=True,
+    )
+    calls = []
+
+    def fake_az(*args, **kwargs):
+        calls.append(args)
+        if args[:3] == ("acr", "repository", "show"):
+            return {"digest": "sha256:" + "b" * 64, "changeableAttributes": {"writeEnabled": False}}
+        return []
+
+    def fake_command(*args, **kwargs):
+        calls.append(args)
+
+    monkeypatch.setattr(release, "az", fake_az)
+    monkeypatch.setattr(release, "command", fake_command)
+    images = release.publish_images(config, tmp_path, "registry.azurecr.io")
+    pushes = [i for i, call in enumerate(calls) if call[:2] == ("docker", "push")]
+    locks = [i for i, call in enumerate(calls) if call[:3] == ("acr", "repository", "update")]
+    assert len(pushes) == len(locks) == 2 and max(pushes) < min(locks)
+    assert all("--delete-enabled" in calls[i] and "--write-enabled" in calls[i] for i in locks)
+    assert len(images) == 2
+
+
+def test_publisher_refuses_to_overwrite_an_existing_version(tmp_path, monkeypatch):
+    for component in ("api", "web"):
+        (tmp_path / f"{component}.tar").touch()
+    config = {"AZURE_CONTAINER_REGISTRY": "registry", "IMAGE_TAG": "release-" + "a" * 40 + "-1-1"}
+
+    def fake_az(*args, **kwargs):
+        return ["passit-api"] if args[2] == "list" else [config["IMAGE_TAG"]]
+
+    monkeypatch.setattr(release, "az", fake_az)
+    monkeypatch.setattr(
+        release, "command", lambda *args, **kwargs: pytest.fail("Cannot push an existing tag")
+    )
+    with pytest.raises(release.DeploymentError, match="already exists"):
+        release.publish_images(config, tmp_path, "registry.azurecr.io")

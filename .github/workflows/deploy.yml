@@ -1,0 +1,62 @@
+name: Deploy selected image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_type:
+        description: Image type
+        required: true
+        type: choice
+        options: [snapshot, release]
+      image_tag:
+        description: Complete tag from the build summary or ACR (same tag for API and web)
+        required: true
+        type: string
+      environment:
+        description: Existing deployment environment
+        required: true
+        type: environment
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.image_type }} to ${{ inputs.environment }}
+    # Deployment tooling and permissions always come from the trusted main branch.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment:
+      name: ${{ inputs.environment }}
+      url: ${{ steps.deploy.outputs.web_url }}
+    concurrency:
+      group: azure-${{ inputs.environment }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: azure/login@8216e11d8cd9b42fe925c852af8e76311ff067ac # v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - run: az extension add --name containerapp --upgrade --only-show-errors
+      - name: Resolve images, migrate and deploy
+        id: deploy
+        env:
+          IMAGE_TYPE: ${{ inputs.image_type }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_CONTAINER_REGISTRY: ${{ vars.AZURE_CONTAINER_REGISTRY }}
+          AZURE_WEB_APP: ${{ vars.AZURE_WEB_APP }}
+          AZURE_API_APP: ${{ vars.AZURE_API_APP }}
+          AZURE_WORKER_APP: ${{ vars.AZURE_WORKER_APP }}
+          AZURE_MIGRATION_JOB: ${{ vars.AZURE_MIGRATION_JOB }}
+          VITE_OIDC_AUTHORITY: ${{ vars.VITE_OIDC_AUTHORITY }}
+          VITE_OIDC_CLIENT_ID: ${{ vars.VITE_OIDC_CLIENT_ID }}
+          VITE_OIDC_SCOPE: ${{ vars.VITE_OIDC_SCOPE }}
+        run: python scripts/azure_deploy.py deploy

@@ -7,12 +7,6 @@ RUN --mount=type=secret,id=proxy_ca,required=false \
     if [ -f /run/secrets/proxy_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; fi; \
     npm ci --ignore-scripts --no-audit --no-fund
 COPY frontend ./
-ARG VITE_OIDC_AUTHORITY=""
-ARG VITE_OIDC_CLIENT_ID=""
-ARG VITE_OIDC_SCOPE="openid profile"
-ENV VITE_OIDC_AUTHORITY=${VITE_OIDC_AUTHORITY} \
-    VITE_OIDC_CLIENT_ID=${VITE_OIDC_CLIENT_ID} \
-    VITE_OIDC_SCOPE=${VITE_OIDC_SCOPE}
 RUN npm run build
 
 FROM ${NGINX_IMAGE} AS runtime

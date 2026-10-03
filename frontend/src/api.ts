@@ -2,15 +2,20 @@ import type { Language } from "./i18n";
 import { UserManager, WebStorageStateStore } from "oidc-client-ts";
 
 const base = import.meta.env.VITE_API_URL || "";
-const authority = import.meta.env.VITE_OIDC_AUTHORITY;
+const authority =
+  window.passitConfig?.authority || import.meta.env.VITE_OIDC_AUTHORITY;
 export const identity = authority
   ? new UserManager({
       authority,
-      client_id: import.meta.env.VITE_OIDC_CLIENT_ID,
+      client_id:
+        window.passitConfig?.clientId || import.meta.env.VITE_OIDC_CLIENT_ID,
       redirect_uri: `${window.location.origin}/auth/callback`,
       post_logout_redirect_uri: window.location.origin,
       response_type: "code",
-      scope: import.meta.env.VITE_OIDC_SCOPE || "openid profile",
+      scope:
+        window.passitConfig?.scope ||
+        import.meta.env.VITE_OIDC_SCOPE ||
+        "openid profile",
       userStore: new WebStorageStateStore({ store: window.sessionStorage }),
     })
   : null;
