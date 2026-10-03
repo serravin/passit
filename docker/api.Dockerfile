@@ -1,4 +1,4 @@
-ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+ARG PYTHON_IMAGE=python:3.12-alpine3.24
 FROM ${PYTHON_IMAGE} AS dependencies
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
@@ -17,11 +17,13 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH=/app/backend \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
-RUN groupadd --gid 10001 passit && useradd --uid 10001 --gid 10001 --no-create-home passit \
+RUN addgroup -S -g 10001 passit && adduser -S -D -H -u 10001 -G passit passit \
     && mkdir /data && chown 10001:10001 /data
 COPY --from=dependencies /app/.venv /app/.venv
 COPY backend /app/backend
 COPY alembic.ini /app/alembic.ini
+# Normalize source permissions for the non-root runtime user across checkout hosts.
+RUN chmod -R a+rX /app/backend && chmod a+r /app/alembic.ini
 USER 10001:10001
 EXPOSE 8000
 CMD ["uvicorn", "passit.api:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -79,7 +79,7 @@ Use **Actions → Deploy selected image → Run workflow** on `main` to choose s
 
 [AGENTS.md](AGENTS.md) requires feature branches and PRs for all agent changes to `main`. Configure GitHub branch protection to enforce this for all contributors. The registry publishing identity and per-environment deployment identities use separate OIDC permissions, as described in the guide.
 
-Local workflow/configuration checks, backend/deployment tests, frontend checks and browser startup passed. The Docker web image also builds and passes its read-only container startup check. Full image/dependency scans still need to pass on GitHub; the cloud network policy blocked Trivy's vulnerability database during earlier validation. No Azure deployment was performed here.
+Local workflow/configuration checks, backend/deployment tests, frontend checks and browser startup passed. The API now uses Python 3.12 on Alpine 3.24; it builds and passes native-library, migration, authentication, game and worker checks. The web build applies vendor updates and requires patched Expat/PCRE2 versions. The new web package upgrade and full image/dependency scans still need to pass on GitHub: the cloud network policy blocks Alpine's package server and Trivy's database registry. No Azure deployment was performed here.
 
 ## Local development
 
