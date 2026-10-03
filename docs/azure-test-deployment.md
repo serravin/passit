@@ -46,7 +46,7 @@ No client secret is needed. Only trusted repository collaborators should have fe
 Linting → Testing → Source security scan → Image build → Image scan → Registry push
 ```
 
-Lint includes Ruff, ESLint, formatting and shell syntax. Testing includes SQLite/PostgreSQL suites, the frontend build and all five browser workflows. Trivy checks source dependencies (including development dependencies), secrets and configuration, then scans the exact built images for vulnerabilities and secrets. HIGH/CRITICAL findings or scanner failures stop the pipeline. Reports remain available for seven days; built image artifacts for one day.
+Lint includes Ruff, ESLint, formatting and shell syntax. Testing includes SQLite/PostgreSQL suites, the frontend build and all five browser workflows. Trivy checks source dependencies (including development dependencies), secrets and configuration, then scans the exact built images for vulnerabilities and secrets. HIGH/CRITICAL findings or scanner failures stop the pipeline. Each scan prints a readable findings table in its **Show scan findings** step and Actions summary, including CVE IDs, installed versions and fixed versions. Secret matches/code are excluded from this table. Full JSON reports remain available for seven days; built image artifacts for one day. If an image scan exits with code 1, use the table or download its `trivy-api`/`trivy-web` artifact to identify the findings. A severity-source warning is informational and does not itself fail a scan.
 
 A branch push publishes the same version for API and web:
 
